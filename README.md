@@ -49,7 +49,8 @@ Incluye la capacidad de apertura temporal del puerto 3306 si la base *_pro no es
         "username": "admin",
         "password": "password",
         "db_instance_identifier": "rds-instance-id",
-        "s3_bucket": "nombre-del-bucket"
+        "s3_bucket": "nombre-del-bucket",
+        "database": "nombre-de-la-base-de-datos"
         }
     ```
 

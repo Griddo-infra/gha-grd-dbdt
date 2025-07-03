@@ -68,15 +68,10 @@ close_temporary_access() {
 }
 
 # -----------------------------------------------
-# Filtrar dump para excluir tablas y usuarios sensibles
+# Filtrar dump para excluir usuarios sensibles
 # -----------------------------------------------
 filter_dump() {
-  grep -v -E "DROP TABLE IF EXISTS \`?(revision|domains)\`?" "$1" | \
-  grep -v -E "CREATE TABLE \`?(revision|domains)\`?" | \
-  grep -v -E "INSERT INTO \`?(revision|domains)\`?" | \
-  grep -v -E "UPDATE \`?(revision|domains)\`?" | \
-  grep -v -E "DELETE FROM \`?(revision|domains)\`?" | \
-  grep -v -E "INSERT INTO \`?users\`?.*'(admin|bot)'" > "$2"
+  grep -v -E "INSERT INTO \`?users\`?.*'(admin|bot)'" "$1" > "$2"
 }
 
 # -----------------------------------------------
@@ -92,6 +87,7 @@ if [[ "$MODE" == "extract" ]]; then
   PASSWORD=$(echo "$SECRET_JSON" | jq -r '.password')
   DB_INSTANCE_ID=$(echo "$SECRET_JSON" | jq -r '.db_instance_identifier')
   S3_BUCKET=$(echo "$SECRET_JSON" | jq -r '.s3_bucket')
+  DATABASE=$(echo "$SECRET_JSON" | jq -r '.database')
 
   # Si la base es _pro, abrir acceso temporal
   if [[ "$SECRET_NAME" == *_pro ]]; then
@@ -99,16 +95,19 @@ if [[ "$MODE" == "extract" ]]; then
     OPENED=1
   fi
 
-  echo "[*] Realizando dump..."
-  mysqldump --single-transaction --quick --lock-tables=false -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" --all-databases > "$DUMP_FILE"
+  echo "[*] Realizando dump de la base: $DATABASE excluyendo tablas revision y domains"
+  mysqldump --single-transaction --quick --lock-tables=false \
+    --ignore-table="${DATABASE}.revision" --ignore-table="${DATABASE}.domains" \
+    -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" "$DATABASE" > "$DUMP_FILE"
   gzip "$DUMP_FILE"
 
   FILENAME="dump_$(date +%Y%m%d_%H%M%S).sql.gz"
-  echo "[*] Subiendo dump a S3..."
+  echo "[*] Subiendo dump comprimido a S3: s3://$S3_BUCKET/$FILENAME"
   aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME"
-  PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL")
 
+  PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL")
   echo "presigned-url=$PRESIGNED_URL" >> "$GITHUB_OUTPUT"
+  echo "[*] URL presignada válida por $TTL segundos: $PRESIGNED_URL"
 
   # Cerrar acceso temporal si se abrió
   if [[ -n "${OPENED:-}" ]]; then
@@ -149,17 +148,18 @@ if [[ "$MODE" == "restore" ]]; then
   ENDPOINT=$(echo "$SECRET_JSON" | jq -r '.endpoint')
   USERNAME=$(echo "$SECRET_JSON" | jq -r '.username')
   PASSWORD=$(echo "$SECRET_JSON" | jq -r '.password')
+  DATABASE=$(echo "$SECRET_JSON" | jq -r '.database')
 
-  echo "[*] Descargando dump..."
+  echo "[*] Descargando dump comprimido desde URL presignada..."
   curl -s -o "$DUMP_FILE_GZ" "$INPUT_URL_PRESIGNED"
   gzip -d "$DUMP_FILE_GZ"
 
   FILTERED_DUMP="$TMP_DIR/dump_filtered.sql"
-  echo "[*] Filtrando contenido sensible..."
+  echo "[*] Filtrando dump para excluir inserciones de usuarios admin y bot..."
   filter_dump "$DUMP_FILE" "$FILTERED_DUMP"
 
-  echo "[*] Restaurando dump..."
-  mysql -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" < "$FILTERED_DUMP"
+  echo "[*] Restaurando dump en la base: $DATABASE"
+  mysql -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" "$DATABASE" < "$FILTERED_DUMP"
 
   clean_up
   exit 0
@@ -194,14 +194,18 @@ if [[ "$MODE" == "completo" ]]; then
   PASSWORD_SRC=$(echo "$SECRET_JSON_SRC" | jq -r '.password')
   DB_INSTANCE_ID=$(echo "$SECRET_JSON_SRC" | jq -r '.db_instance_identifier')
   S3_BUCKET=$(echo "$SECRET_JSON_SRC" | jq -r '.s3_bucket')
+  DATABASE_SRC=$(echo "$SECRET_JSON_SRC" | jq -r '.database')
+
 
   if [[ "$SECRET_NAME" == *_pro ]]; then
     read -r SG_ID MY_IP <<< "$(open_temporary_access "$DB_INSTANCE_ID")"
     OPENED=1
   fi
 
-  echo "[*] Realizando dump..."
-  mysqldump --single-transaction --quick --lock-tables=false -h "$ENDPOINT_SRC" -u "$USERNAME_SRC" -p"$PASSWORD_SRC" --all-databases > "$DUMP_FILE"
+  echo "[*] Realizando dump de la base: $DATABASE_SRC excluyendo tablas revision y domains"
+  mysqldump --single-transaction --quick --lock-tables=false \
+    --ignore-table="${DATABASE_SRC}.revision" --ignore-table="${DATABASE_SRC}.domains" \
+    -h "$ENDPOINT_SRC" -u "$USERNAME_SRC" -p"$PASSWORD_SRC" "$DATABASE_SRC" > "$DUMP_FILE"
   gzip "$DUMP_FILE"
 
   FILENAME="dump_$(date +%Y%m%d_%H%M%S).sql.gz"
@@ -210,6 +214,7 @@ if [[ "$MODE" == "completo" ]]; then
   PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL")
 
   if [[ -n "${OPENED:-}" ]]; then
+    echo "[*] Cerrando acceso temporal..."
     close_temporary_access "$SG_ID" "$MY_IP"
   fi
 
@@ -221,20 +226,21 @@ if [[ "$MODE" == "completo" ]]; then
   ENDPOINT_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.endpoint')
   USERNAME_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.username')
   PASSWORD_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.password')
+  DATABASE_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.database')
 
-  echo "[*] Descargando dump..."
+
+  echo "[*] Descargando dump comprimido desde URL presignada..."
   curl -s -o "$DUMP_FILE_GZ" "$PRESIGNED_URL"
   gzip -d "$DUMP_FILE_GZ"
 
   FILTERED_DUMP="$TMP_DIR/dump_filtered.sql"
-  echo "[*] Filtrando contenido sensible..."
+  echo "[*] Filtrando dump para excluir inserciones de usuarios admin y bot..."
   filter_dump "$DUMP_FILE" "$FILTERED_DUMP"
 
-  echo "[*] Restaurando dump..."
-  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" < "$FILTERED_DUMP"
+  echo "[*] Restaurando dump en la base: $DATABASE_DEST"
+  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" < "$FILTERED_DUMP"
 
   clean_up
-
   echo "presigned-url=$PRESIGNED_URL" >> "$GITHUB_OUTPUT"
   exit 0
 fi
