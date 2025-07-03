@@ -75,9 +75,9 @@ filter_dump() {
 }
 
 # -----------------------------------------------
-# Modo extract: volcado y subida a S3
+# Modo extraer: volcado y subida a S3
 # -----------------------------------------------
-if [[ "$MODE" == "extract" ]]; then
+if [[ "$MODE" == "extraer" ]]; then
   ROLE_SRC="arn:aws:iam::${AWS_ACCOUNT_ID_SOURCE}:role/DBDumpRole"
   assume_role "$ROLE_SRC"
 
@@ -89,11 +89,8 @@ if [[ "$MODE" == "extract" ]]; then
   S3_BUCKET=$(echo "$SECRET_JSON" | jq -r '.s3_bucket')
   DATABASE=$(echo "$SECRET_JSON" | jq -r '.database')
 
-  # Si la base es _pro, abrir acceso temporal
-  if [[ "$SECRET_NAME" == *_pro ]]; then
-    read -r SG_ID MY_IP <<< "$(open_temporary_access "$DB_INSTANCE_ID")"
-    OPENED=1
-  fi
+  # Abrir acceso temporal
+  read -r SG_ID MY_IP <<< "$(open_temporary_access "$DB_INSTANCE_ID")"
 
   echo "[*] Realizando dump de la base: $DATABASE excluyendo tablas revision y domains"
   mysqldump --single-transaction --quick --lock-tables=false \
@@ -109,29 +106,27 @@ if [[ "$MODE" == "extract" ]]; then
   echo "presigned-url=$PRESIGNED_URL" >> "$GITHUB_OUTPUT"
   echo "[*] URL presignada válida por $TTL segundos: $PRESIGNED_URL"
 
-  # Cerrar acceso temporal si se abrió
-  if [[ -n "${OPENED:-}" ]]; then
-    close_temporary_access "$SG_ID" "$MY_IP"
-  fi
-
+  # Cerrar acceso temporal
+  close_temporary_access "$SG_ID" "$MY_IP"
+  
   clean_up
   exit 0
 fi
 
 # -----------------------------------------------
-# Modo restore: descarga y restauración del dump
+# Modo restaurar: descarga y restauración del dump
 # -----------------------------------------------
-if [[ "$MODE" == "restore" ]]; then
+if [[ "$MODE" == "restaurar" ]]; then
   if [[ -z "${INPUT_URL_PRESIGNED:-}" ]]; then
-    echo "ERROR: Se requiere la URL presignada en modo restore."
+    echo "ERROR: Se requiere la URL presignada en modo restaurar."
     exit 1
   fi
   if [[ -z "$SECRET_NAME_DEST" ]]; then
-    echo "ERROR: 'secret_name_dest' obligatorio en modo restore."
+    echo "ERROR: 'secret_name_dest' obligatorio en modo restaurar."
     exit 1
   fi
   if [[ -z "$AWS_ACCOUNT_ID_DEST" ]]; then
-    echo "ERROR: 'aws_account_id_dest' obligatorio en modo restore."
+    echo "ERROR: 'aws_account_id_dest' obligatorio en modo restaurar."
     exit 1
   fi
 
@@ -158,15 +153,21 @@ if [[ "$MODE" == "restore" ]]; then
   echo "[*] Filtrando dump para excluir inserciones de usuarios admin y bot..."
   filter_dump "$DUMP_FILE" "$FILTERED_DUMP"
 
+  # Abrir acceso temporal
+  read -r SG_ID MY_IP <<< "$(open_temporary_access "$DB_INSTANCE_ID")"
+
   echo "[*] Restaurando dump en la base: $DATABASE"
   mysql -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" "$DATABASE" < "$FILTERED_DUMP"
+
+  # Cerrar acceso temporal
+  close_temporary_access "$SG_ID" "$MY_IP"
 
   clean_up
   exit 0
 fi
 
 # -----------------------------------------------
-# Modo completo: extract + restore
+# Modo completo: extraer + restaurar
 # -----------------------------------------------
 if [[ "$MODE" == "completo" ]]; then
   if [[ -z "$SECRET_NAME_DEST" ]]; then
@@ -196,11 +197,8 @@ if [[ "$MODE" == "completo" ]]; then
   S3_BUCKET=$(echo "$SECRET_JSON_SRC" | jq -r '.s3_bucket')
   DATABASE_SRC=$(echo "$SECRET_JSON_SRC" | jq -r '.database')
 
-
-  if [[ "$SECRET_NAME" == *_pro ]]; then
-    read -r SG_ID MY_IP <<< "$(open_temporary_access "$DB_INSTANCE_ID")"
-    OPENED=1
-  fi
+  # Abrir acceso temporal
+  read -r SG_ID MY_IP <<< "$(open_temporary_access "$DB_INSTANCE_ID")"
 
   echo "[*] Realizando dump de la base: $DATABASE_SRC excluyendo tablas revision y domains"
   mysqldump --single-transaction --quick --lock-tables=false \
@@ -213,10 +211,8 @@ if [[ "$MODE" == "completo" ]]; then
   aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME"
   PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL")
 
-  if [[ -n "${OPENED:-}" ]]; then
-    echo "[*] Cerrando acceso temporal..."
-    close_temporary_access "$SG_ID" "$MY_IP"
-  fi
+  # Cerrar acceso temporal
+  close_temporary_access "$SG_ID" "$MY_IP"
 
   # Restauración
   ROLE_DEST="arn:aws:iam::${AWS_ACCOUNT_ID_DEST}:role/DBDumpRole"
@@ -227,6 +223,7 @@ if [[ "$MODE" == "completo" ]]; then
   USERNAME_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.username')
   PASSWORD_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.password')
   DATABASE_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.database')
+  DB_INSTANCE_ID_DEST=$(echo "$SECRET_JSON_SRC" | jq -r '.db_instance_identifier')
 
 
   echo "[*] Descargando dump comprimido desde URL presignada..."
@@ -237,8 +234,14 @@ if [[ "$MODE" == "completo" ]]; then
   echo "[*] Filtrando dump para excluir inserciones de usuarios admin y bot..."
   filter_dump "$DUMP_FILE" "$FILTERED_DUMP"
 
+  # Abrir acceso temporal
+  read -r SG_ID_DEST MY_IP <<< "$(open_temporary_access "$DB_INSTANCE_ID_DEST")"
+
   echo "[*] Restaurando dump en la base: $DATABASE_DEST"
   mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" < "$FILTERED_DUMP"
+
+  # Cerrar acceso temporal
+  close_temporary_access "$SG_ID_DEST" "$MY_IP"
 
   clean_up
   echo "presigned-url=$PRESIGNED_URL" >> "$GITHUB_OUTPUT"
