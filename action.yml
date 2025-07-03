@@ -1,0 +1,37 @@
+name: "Volcado y Restauración de Base de Datos Multi-Cuenta"
+description: "Extrae y/o restaura bases de datos MySQL/MariaDB en RDS usando Secrets Manager y S3 en múltiples cuentas AWS"
+author: "Orencio"
+inputs:
+  mode:
+    description: "Modo de operación: extract (extraer), restore (restaurar) o completo (ambos)"
+    required: true
+  aws_account_id_source:
+    description: "ID de la cuenta AWS origen"
+    required: true
+  aws_account_id_dest:
+    description: "ID de la cuenta AWS destino (obligatorio en modo restore o completo)"
+    required: false
+  secret_name:
+    description: "Nombre del secreto de la base de datos origen"
+    required: true
+  secret_name_dest:
+    description: "Nombre del secreto de la base de datos destino (obligatorio en modo restore o completo)"
+    required: false
+  ttl:
+    description: "TTL en segundos para la URL presignada"
+    required: false
+    default: "7200"
+runs:
+  using: "composite"
+  steps:
+    - name: Instalar dependencias
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mysql-client jq
+
+    - name: Ejecutar volcado/restauración
+      shell: bash
+      run: |
+        chmod +x ${{ github.action_path }}/entrypoint.sh
+        ${{ github.action_path }}/entrypoint.sh
