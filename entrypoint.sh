@@ -1,6 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
+# -----------------------------------------------
+# Entrada de parámetros desde los inputs del Action
+# -----------------------------------------------
 MODE="${INPUT_MODE}"
 AWS_ACCOUNT_ID_SOURCE="${INPUT_AWS_ACCOUNT_ID_SOURCE}"
 AWS_ACCOUNT_ID_DEST="${INPUT_AWS_ACCOUNT_ID_DEST:-}"
@@ -8,10 +11,16 @@ SECRET_NAME="${INPUT_SECRET_NAME}"
 SECRET_NAME_DEST="${INPUT_SECRET_NAME_DEST:-}"
 TTL="${INPUT_TTL:-7200}"
 
+# -----------------------------------------------
+# Crear directorio temporal seguro
+# -----------------------------------------------
 TMP_DIR=$(mktemp -d)
 DUMP_FILE="$TMP_DIR/dump.sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
 
+# -----------------------------------------------
+# Limpiar ficheros temporales al finalizar
+# -----------------------------------------------
 clean_up() {
   echo "[*] Limpiando ficheros temporales..."
   if [[ -f "$DUMP_FILE" ]]; then shred -u "$DUMP_FILE"; fi
@@ -19,6 +28,9 @@ clean_up() {
   rm -rf "$TMP_DIR"
 }
 
+# -----------------------------------------------
+# Asumir un rol de IAM en la cuenta indicada
+# -----------------------------------------------
 assume_role() {
   local role_arn=$1
   echo "[*] Asumiendo rol: $role_arn"
@@ -28,10 +40,16 @@ assume_role() {
   export AWS_SESSION_TOKEN=$(echo "$CREDS_JSON" | jq -r '.Credentials.SessionToken')
 }
 
+# -----------------------------------------------
+# Obtener secreto de Secrets Manager
+# -----------------------------------------------
 get_secret() {
   aws secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text
 }
 
+# -----------------------------------------------
+# Abrir acceso temporal al puerto 3306 de RDS
+# -----------------------------------------------
 open_temporary_access() {
   local db_instance_id=$1
   SG_ID=$(aws rds describe-db-instances --db-instance-identifier "$db_instance_id" \
@@ -42,10 +60,16 @@ open_temporary_access() {
   echo "$SG_ID $MY_IP"
 }
 
+# -----------------------------------------------
+# Cerrar acceso temporal al puerto 3306 de RDS
+# -----------------------------------------------
 close_temporary_access() {
   aws ec2 revoke-security-group-ingress --group-id "$1" --protocol tcp --port 3306 --cidr "$2"
 }
 
+# -----------------------------------------------
+# Filtrar dump para excluir tablas y usuarios sensibles
+# -----------------------------------------------
 filter_dump() {
   grep -v -E "DROP TABLE IF EXISTS \`?(revision|domains)\`?" "$1" | \
   grep -v -E "CREATE TABLE \`?(revision|domains)\`?" | \
@@ -55,7 +79,9 @@ filter_dump() {
   grep -v -E "INSERT INTO \`?users\`?.*'(admin|bot)'" > "$2"
 }
 
-# Modo extract
+# -----------------------------------------------
+# Modo extract: volcado y subida a S3
+# -----------------------------------------------
 if [[ "$MODE" == "extract" ]]; then
   ROLE_SRC="arn:aws:iam::${AWS_ACCOUNT_ID_SOURCE}:role/DBDumpRole"
   assume_role "$ROLE_SRC"
@@ -67,20 +93,24 @@ if [[ "$MODE" == "extract" ]]; then
   DB_INSTANCE_ID=$(echo "$SECRET_JSON" | jq -r '.db_instance_identifier')
   S3_BUCKET=$(echo "$SECRET_JSON" | jq -r '.s3_bucket')
 
+  # Si la base es _pro, abrir acceso temporal
   if [[ "$SECRET_NAME" == *_pro ]]; then
     read -r SG_ID MY_IP <<< "$(open_temporary_access "$DB_INSTANCE_ID")"
     OPENED=1
   fi
 
+  echo "[*] Realizando dump..."
   mysqldump --single-transaction --quick --lock-tables=false -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" --all-databases > "$DUMP_FILE"
   gzip "$DUMP_FILE"
 
   FILENAME="dump_$(date +%Y%m%d_%H%M%S).sql.gz"
+  echo "[*] Subiendo dump a S3..."
   aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME"
   PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL")
 
   echo "presigned-url=$PRESIGNED_URL" >> "$GITHUB_OUTPUT"
 
+  # Cerrar acceso temporal si se abrió
   if [[ -n "${OPENED:-}" ]]; then
     close_temporary_access "$SG_ID" "$MY_IP"
   fi
@@ -89,7 +119,9 @@ if [[ "$MODE" == "extract" ]]; then
   exit 0
 fi
 
-# Modo restore
+# -----------------------------------------------
+# Modo restore: descarga y restauración del dump
+# -----------------------------------------------
 if [[ "$MODE" == "restore" ]]; then
   if [[ -z "${INPUT_URL_PRESIGNED:-}" ]]; then
     echo "ERROR: Se requiere la URL presignada en modo restore."
@@ -104,6 +136,12 @@ if [[ "$MODE" == "restore" ]]; then
     exit 1
   fi
 
+  # 🚨 Validación de seguridad
+  if [[ "$SECRET_NAME_DEST" == *_pro* ]]; then
+    echo "ERROR: No está permitido usar un entorno _pro como destino de restauración."
+    exit 1
+  fi
+
   ROLE_DEST="arn:aws:iam::${AWS_ACCOUNT_ID_DEST}:role/DBDumpRole"
   assume_role "$ROLE_DEST"
 
@@ -112,19 +150,24 @@ if [[ "$MODE" == "restore" ]]; then
   USERNAME=$(echo "$SECRET_JSON" | jq -r '.username')
   PASSWORD=$(echo "$SECRET_JSON" | jq -r '.password')
 
+  echo "[*] Descargando dump..."
   curl -s -o "$DUMP_FILE_GZ" "$INPUT_URL_PRESIGNED"
   gzip -d "$DUMP_FILE_GZ"
 
   FILTERED_DUMP="$TMP_DIR/dump_filtered.sql"
+  echo "[*] Filtrando contenido sensible..."
   filter_dump "$DUMP_FILE" "$FILTERED_DUMP"
 
+  echo "[*] Restaurando dump..."
   mysql -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" < "$FILTERED_DUMP"
 
   clean_up
   exit 0
 fi
 
-# Modo completo
+# -----------------------------------------------
+# Modo completo: extract + restore
+# -----------------------------------------------
 if [[ "$MODE" == "completo" ]]; then
   if [[ -z "$SECRET_NAME_DEST" ]]; then
     echo "ERROR: 'secret_name_dest' obligatorio en modo completo."
@@ -135,6 +178,13 @@ if [[ "$MODE" == "completo" ]]; then
     exit 1
   fi
 
+  # 🚨 Validación de seguridad
+  if [[ "$SECRET_NAME_DEST" == *_pro* ]]; then
+    echo "ERROR: No está permitido usar un entorno _pro como destino de restauración."
+    exit 1
+  fi
+
+  # Extracción
   ROLE_SRC="arn:aws:iam::${AWS_ACCOUNT_ID_SOURCE}:role/DBDumpRole"
   assume_role "$ROLE_SRC"
 
@@ -150,10 +200,12 @@ if [[ "$MODE" == "completo" ]]; then
     OPENED=1
   fi
 
+  echo "[*] Realizando dump..."
   mysqldump --single-transaction --quick --lock-tables=false -h "$ENDPOINT_SRC" -u "$USERNAME_SRC" -p"$PASSWORD_SRC" --all-databases > "$DUMP_FILE"
   gzip "$DUMP_FILE"
 
   FILENAME="dump_$(date +%Y%m%d_%H%M%S).sql.gz"
+  echo "[*] Subiendo dump a S3..."
   aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME"
   PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL")
 
@@ -161,6 +213,7 @@ if [[ "$MODE" == "completo" ]]; then
     close_temporary_access "$SG_ID" "$MY_IP"
   fi
 
+  # Restauración
   ROLE_DEST="arn:aws:iam::${AWS_ACCOUNT_ID_DEST}:role/DBDumpRole"
   assume_role "$ROLE_DEST"
 
@@ -169,12 +222,15 @@ if [[ "$MODE" == "completo" ]]; then
   USERNAME_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.username')
   PASSWORD_DEST=$(echo "$SECRET_JSON_DEST" | jq -r '.password')
 
+  echo "[*] Descargando dump..."
   curl -s -o "$DUMP_FILE_GZ" "$PRESIGNED_URL"
   gzip -d "$DUMP_FILE_GZ"
 
   FILTERED_DUMP="$TMP_DIR/dump_filtered.sql"
+  echo "[*] Filtrando contenido sensible..."
   filter_dump "$DUMP_FILE" "$FILTERED_DUMP"
 
+  echo "[*] Restaurando dump..."
   mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" < "$FILTERED_DUMP"
 
   clean_up
@@ -183,5 +239,8 @@ if [[ "$MODE" == "completo" ]]; then
   exit 0
 fi
 
+# -----------------------------------------------
+# Modo inválido
+# -----------------------------------------------
 echo "ERROR: Modo inválido: $MODE"
 exit 1

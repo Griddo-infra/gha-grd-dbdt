@@ -8,11 +8,11 @@ Se soportan tres modos de ejecución:
 
   - Realiza el volcado y sube el dump comprimido a S3.
 
-  - Devuelve una URL presignada para descargar el dump.
+  - Devuelve una URL pre-firmadas para descargar el dump.
 
 - restore
 
-  - Descarga un dump comprimido desde una URL presignada y lo restaura en la base de datos destino.
+  - Descarga un dump comprimido desde una URL pre-firmadas y lo restaura en la base de datos destino.
 
 - completo
 
@@ -61,7 +61,7 @@ Incluye la capacidad de apertura temporal del puerto 3306 si la base *_pro no es
 | `aws_account_id_dest`   | No        | ID de la cuenta AWS destino donde reside la base de datos destino (obligatorio en `restore` o `completo`). |
 | `secret_name`           | Sí        | Nombre del secreto con las credenciales de la base origen.                                                 |
 | `secret_name_dest`      | No        | Nombre del secreto con las credenciales de la base destino (obligatorio en `restore` o `completo`).        |
-| `ttl`                   | No        | Tiempo en segundos de validez de la URL presignada (por defecto 7200).                                     |
+| `ttl`                   | No        | Tiempo en segundos de validez de la URL pre-firmadas (por defecto 7200).                                     |
 
 ---
 ## 🚦 Ejemplos de uso del Workflow
@@ -89,7 +89,7 @@ jobs:
           ttl: "3600"
 
       - name: Mostrar URL de descarga
-        run: echo "URL presignada: ${{ steps.dump.outputs.presigned-url }}"
+        run: echo "URL pre-firmadas: ${{ steps.dump.outputs.presigned-url }}"
 ```
 ### 🟡 Modo restore (descargar dump y restaurar)
 ```yaml
@@ -138,7 +138,7 @@ jobs:
           secret_name_dest: "pruebas_pro"
           ttl: "7200"
 
-      - name: Mostrar URL presignada
+      - name: Mostrar URL pre-firmadas
         run: echo "Dump disponible temporalmente en: ${{ steps.full.outputs.presigned-url }}"
 ```
 ## 🧩 Funcionamiento interno
@@ -165,7 +165,7 @@ jobs:
 
     - El dump se sube comprimido a S3.
 
-    - Se devuelve una URL presignada con caducidad (ttl).
+    - Se devuelve una URL pre-firmadas con caducidad (ttl).
 
 5. Restauración:
 
