@@ -34,7 +34,9 @@ Incluye la capacidad de apertura temporal del puerto 3306 si la base *_pro no es
 
         ec2:RevokeSecurityGroupIngress
 
-        s3:PutObject, s3:GetObject
+        s3:PutObject
+        
+        s3:GetObject
 
         secretsmanager:GetSecretValue
 
@@ -171,9 +173,9 @@ jobs:
 
 ## 🔐 Consideraciones de seguridad
 
-    Los dumps quedan en S3 solo durante el tiempo definido por el TTL.
+- Los dumps quedan en S3 solo durante el tiempo definido por el TTL.
 
-    El acceso al puerto MySQL se abre exclusivamente al runner y se cierra inmediatamente tras finalizar.
+- El acceso al puerto MySQL se abre exclusivamente al runner y se cierra inmediatamente tras finalizar.
 
-    Los ficheros locales se eliminan con shred para evitar recuperación.
+- Los ficheros locales se eliminan con shred para evitar recuperación.
 
