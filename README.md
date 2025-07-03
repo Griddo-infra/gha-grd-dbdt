@@ -85,7 +85,7 @@ jobs:
         with:
           mode: extract
           aws_account_id_source: "111111111111"
-          secret_name: "pruebas_dev"
+          secret_name: "pruebas_pro"
           ttl: "3600"
 
       - name: Mostrar URL de descarga
@@ -104,18 +104,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      
+      - name: Validar que el destino no sea _pro
+        run: |
+            if [[ "${{ inputs.secret_name_dest }}" == *_pro* ]]; then
+            echo "ERROR: No está permitido restaurar en un entorno _pro."
+            exit 1
+            fi
 
       - name: Restaurar desde dump
         uses: ./github/actions/db-dump-restore
         with:
           mode: restore
           aws_account_id_dest: "222222222222"
-          secret_name_dest: "pruebas_pro"
+          secret_name_dest: "pruebas_dev"
           url_presigned: "https://bucket.s3.amazonaws.com/dump_xxxxx.sql.gz?..."
 ```
 ### 🟣 Modo completo (extraer y restaurar entre cuentas)
 ```yaml
-name: Clonar Base de Datos Dev -> Pro
+name: Clonar Base de Datos Pro -> Dev
 
 on:
   workflow_dispatch:
@@ -126,6 +133,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      
+      - name: Validar que el destino no sea _pro
+        run: |
+            if [[ "${{ inputs.secret_name_dest }}" == *_pro* ]]; then
+            echo "ERROR: No está permitido restaurar en un entorno _pro."
+            exit 1
+            fi
 
       - name: Dump y restauración completa
         id: full
@@ -134,8 +148,8 @@ jobs:
           mode: completo
           aws_account_id_source: "111111111111"
           aws_account_id_dest: "222222222222"
-          secret_name: "pruebas_dev"
-          secret_name_dest: "pruebas_pro"
+          secret_name: "pruebas_pro"
+          secret_name_dest: "pruebas_dev"
           ttl: "7200"
 
       - name: Mostrar URL pre-firmadas

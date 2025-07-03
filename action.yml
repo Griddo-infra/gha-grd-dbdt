@@ -3,7 +3,7 @@ description: "Extrae y/o restaura bases de datos MySQL/MariaDB en RDS usando Sec
 author: "Orencio"
 inputs:
   mode:
-    description: "Modo de operación: extract (extraer), restore (restaurar) o completo (ambos)"
+    description: "Modo de operación: extraer, restaurar o completo (ambos)"
     required: true
   aws_account_id_source:
     description: "ID de la cuenta AWS origen"
@@ -15,7 +15,7 @@ inputs:
     description: "Nombre del secreto de la base de datos origen"
     required: true
   secret_name_dest:
-    description: "Nombre del secreto de la base de datos destino (obligatorio en modo restore o completo)"
+    description: "Nombre del secreto de la base de datos destino (obligatorio en modo restaurar o completo)"
     required: false
   ttl:
     description: "TTL en segundos para la URL presignada"
