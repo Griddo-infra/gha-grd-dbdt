@@ -4,13 +4,13 @@ Esta Action permite realizar volcados (dumps) y restauraciones de bases de datos
 
 Se soportan tres modos de ejecución:
 
-- extract
+- extraer
 
   - Realiza el volcado y sube el dump comprimido a S3.
 
   - Devuelve una URL pre-firmadas para descargar el dump.
 
-- restore
+- restaurar
 
   - Descarga un dump comprimido desde una URL pre-firmadas y lo restaura en la base de datos destino.
 
@@ -57,16 +57,16 @@ Incluye la capacidad de apertura temporal del puerto 3306 si la base *_pro no es
 ## 🎛 Entradas (inputs)
 | Nombre                  | Requerido | Descripción                                                                                                |
 | ----------------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `mode`                  | Sí        | Modo de operación: `extract`, `restore` o `completo`.                                                      |
+| `mode`                  | Sí        | Modo de operación: `extraer`, `restaurar` o `completo`.                                                      |
 | `aws_account_id_source` | Sí        | ID de la cuenta AWS origen donde reside la base de datos origen.                                           |
-| `aws_account_id_dest`   | No        | ID de la cuenta AWS destino donde reside la base de datos destino (obligatorio en `restore` o `completo`). |
+| `aws_account_id_dest`   | No        | ID de la cuenta AWS destino donde reside la base de datos destino (obligatorio en `restaurar` o `completo`). |
 | `secret_name`           | Sí        | Nombre del secreto con las credenciales de la base origen.                                                 |
-| `secret_name_dest`      | No        | Nombre del secreto con las credenciales de la base destino (obligatorio en `restore` o `completo`).        |
-| `ttl`                   | No        | Tiempo en segundos de validez de la URL pre-firmadas (por defecto 7200).                                     |
+| `secret_name_dest`      | No        | Nombre del secreto con las credenciales de la base destino (obligatorio en `restaurar` o `completo`).        |
+| `ttl`                   | No        | Tiempo en segundos de validez de la URL pre-firmadas (por defecto 7200, obligatorio en `restaurar`).                                     |
 
 ---
 ## 🚦 Ejemplos de uso del Workflow
-### 🟢 Modo extract (dump y subida a S3)
+### 🟢 Modo extraer (dump y subida a S3)
 ```yaml
 name: Dump Base de Datos
 
@@ -82,9 +82,9 @@ jobs:
 
       - name: Realizar dump y obtener URL
         id: dump
-        uses: ./github/actions/db-dump-restore
+        uses: griddo-infra/gha-grd-dbdt@0.1
         with:
-          mode: extract
+          mode: extraer
           aws_account_id_source: "111111111111"
           secret_name: "pruebas_pro"
           ttl: "3600"
@@ -92,7 +92,7 @@ jobs:
       - name: Mostrar URL de descarga
         run: echo "URL pre-firmadas: ${{ steps.dump.outputs.presigned-url }}"
 ```
-### 🟡 Modo restore (descargar dump y restaurar)
+### 🟡 Modo restaurar (descargar dump y restaurar)
 ```yaml
 name: Restaurar Base de Datos
 
@@ -100,7 +100,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  restore:
+  restaurar:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -114,9 +114,9 @@ jobs:
             fi
 
       - name: Restaurar desde dump
-        uses: ./github/actions/db-dump-restore
+        uses: griddo-infra/gha-grd-dbdt@0.1
         with:
-          mode: restore
+          mode: restaurar
           aws_account_id_dest: "222222222222"
           secret_name_dest: "pruebas_dev"
           url_presigned: "https://bucket.s3.amazonaws.com/dump_xxxxx.sql.gz?..."
@@ -144,7 +144,7 @@ jobs:
 
       - name: Dump y restauración completa
         id: full
-        uses: ./github/actions/db-dump-restore
+        uses: griddo-infra/gha-grd-dbdt@0.1
         with:
           mode: completo
           aws_account_id_source: "111111111111"
@@ -166,9 +166,9 @@ jobs:
 
 2. Apertura temporal:
 
-    - Si la base *_pro no es accesible, abre dinámicamente la IP del runner en el security group.
+    - La acción abre dinámicamente el acceso al puerto 3306 si es necesario, tanto en origen como en destino.
 
-    - El acceso se revoca tras el dump.
+    - El acceso se revoca inmediatamente tras terminar cada operación (dump o restauración), y también se cierra automáticamente en caso de fallo.
 
 3. Dump y filtrado:
 
