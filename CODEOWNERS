@@ -1,0 +1,9 @@
+# CODEOWNERS para protección de infraestructura
+.github/workflows/ @Griddo-infra/admins
+scripts/ @Griddo-infra/admins
+entrypoint.sh @Griddo-infra/admins
+example.md @Griddo-infra/admins
+PULL_REQUEST_TEMPLATE.md @Griddo-infra/admins
+README.md @Griddo-infra/admins
+SECURITY.md @Griddo-infra/admins
+action.yml @Griddo-infra/admins

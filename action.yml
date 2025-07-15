@@ -1,44 +1,66 @@
-name: "AWS RDS Dump & Restore"
-description: "Vuelca, comprime, sube, descarga y restaura bases de datos RDS MySQL/MariaDB en AWS, con filtrado de datos sensibles."
-author: "Tu nombre o tu organización"
+name: 'Volcado y restauración de RDS'
+description: 'Volcado y restauración de MySQL/MariaDB RDS a través de Secrets Manager y S3'
+author: 'Orencio Ramirez'
 inputs:
   mode:
-    description: "Modo de operación: extraer | restaurar | completo"
+    description: 'Modo de operación: extraer | restaurar | completo'
     required: true
-  aws_account_id_origen:
-    description: "AWS Account ID origen (para extraer o completo)"
+  aws_account_origin:
+    description: 'ID de cuenta AWS de origen (para extraer o completo)'
     required: false
-  aws_account_id_destino:
-    description: "AWS Account ID destino (para restaurar o completo)"
+  secret_origin:
+    description: 'Nombre del secreto de origen en AWS Secrets Manager'
     required: false
-  secreto_origen:
-    description: "Nombre del secreto origen en AWS Secrets Manager"
+  aws_account_dest:
+    description: 'ID de cuenta AWS de destino (para restaurar o completo)'
     required: false
-  secreto_destino:
-    description: "Nombre del secreto destino en AWS Secrets Manager"
+  secret_dest:
+    description: 'Nombre del secreto de destino en AWS Secrets Manager'
+    required: false
+  presigned_url:
+    description: 'URL pre-firmada S3 (necesaria en modo restaurar)'
     required: false
   ttl:
-    description: "Tiempo de vida del presigned URL en segundos"
+    description: 'TTL de la URL pre-firmada en segundos'
     required: false
-    default: "7200"
-  presigned_url:
-    description: "URL presignada de S3 (para restaurar)"
-    required: false
+    default: '7200'
 
 runs:
   using: "composite"
   steps:
-    - name: Configurar permisos de ejecución
-      shell: bash
-      run: chmod +x ${{ github.action_path }}/entrypoint.sh
-    - name: Ejecutar Script
+    - name: Instalar Dependencias
       shell: bash
       run: |
-        ${{ github.action_path }}/entrypoint.sh \
-          "${{ inputs.mode }}" \
-          "${{ inputs.aws_account_id_origen }}" \
-          "${{ inputs.secreto_origen }}" \
-          "${{ inputs.aws_account_id_destino }}" \
-          "${{ inputs.secreto_destino }}" \
-          "${{ inputs.presigned_url }}" \
-          "${{ inputs.ttl }}"
+        sudo apt-get update
+        sudo apt-get install -y awscli jq mysql-client gzip curl
+
+    - name: Ejecutar Volcado y restauración de RDS
+      shell: bash
+      run: |
+        chmod +x ${{ github.action_path }}/entrypoint.sh
+        case "${{ inputs.mode }}" in
+          extraer)
+            ${{ github.action_path }}/entrypoint.sh extraer \
+              "${{ inputs.aws_account_origin }}" \
+              "${{ inputs.secret_origin }}" \
+              "${{ inputs.ttl }}"
+            ;;
+          restaurar)
+            ${{ github.action_path }}/entrypoint.sh restaurar \
+              "${{ inputs.aws_account_dest }}" \
+              "${{ inputs.secret_dest }}" \
+              "${{ inputs.presigned_url }}"
+            ;;
+          completo)
+            ${{ github.action_path }}/entrypoint.sh completo \
+              "${{ inputs.aws_account_origin }}" \
+              "${{ inputs.secret_origin }}" \
+              "${{ inputs.aws_account_dest }}" \
+              "${{ inputs.secret_dest }}" \
+              "${{ inputs.ttl }}"
+            ;;
+          *)
+            echo "Modo no soportado: ${{ inputs.mode }}"
+            exit 1
+            ;;
+        esac
