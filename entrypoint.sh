@@ -102,7 +102,7 @@ modo_extraer() {
 
   open_temporary_access "$DB_INSTANCE_ID"
 
-  mysqldump --single-transaction --quick --lock-tables=false \
+  mysqldump --single-transaction --quick --skip-lock-tables \
     --ignore-table="${DATABASE}.revisions" --ignore-table="${DATABASE}.domains" \
     -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" "$DATABASE" > "$DUMP_FILE"
 
