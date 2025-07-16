@@ -114,7 +114,7 @@ modo_extraer() {
   aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME" --metadata-directive REPLACE --content-disposition "attachment; filename=\"$FILENAME\""
 
   PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL" --output text)
-  echo "$PRESIGNED_URL" >> $GITHUB_OUTPUT
+  echo "presigned_url=$PRESIGNED_URL" >> $GITHUB_OUTPUT
 }
 
 modo_restaurar() {
