@@ -24,6 +24,10 @@ inputs:
     description: 'TTL de la URL pre-firmada en segundos'
     required: false
     default: '7200'
+outputs:
+  presigned_url:
+    description: "URL pre-firmada generada tras el volcado"
+    value: ${{ steps.run_script.outputs.presigned_url }}
 
 runs:
   using: "composite"
@@ -35,6 +39,7 @@ runs:
         sudo apt-get install -y awscli jq mysql-client gzip curl
 
     - name: Ejecutar Volcado y restauración de RDS
+      id: run_script
       shell: bash
       run: |
         chmod +x ${{ github.action_path }}/entrypoint.sh
