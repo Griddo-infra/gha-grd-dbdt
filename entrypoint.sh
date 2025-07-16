@@ -90,7 +90,7 @@ modo_extraer() {
   local TTL=${3:-7200}
   ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/DBDumpRoleGH"
 
-  assume_role "$ROLE_ARN"
+#  assume_role "$ROLE_ARN"
 
   SECRET_JSON=$(get_secret "$SECRET_NAME")
   ENDPOINT=$(echo "$SECRET_JSON" | jq -r '.endpoint')
