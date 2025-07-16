@@ -88,7 +88,7 @@ modo_extraer() {
   local AWS_ACCOUNT_ID=$1
   local SECRET_NAME=$2
   local TTL=${3:-7200}
-  ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/DBDumpRole"
+  ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/DBDumpRoleGH"
 
   assume_role "$ROLE_ARN"
 
@@ -111,7 +111,7 @@ modo_extraer() {
   gzip "$DUMP_FILE"
 
   FILENAME="dump_$(date +%Y%m%d_%H%M%S).sql.gz"
-  aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME"
+  aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME" --metadata-directive REPLACE --content-disposition "attachment; filename=\"$FILENAME\""
 
   PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL" --output text)
   echo "$PRESIGNED_URL" >> $GITHUB_OUTPUT
@@ -128,7 +128,7 @@ modo_restaurar() {
   fi
 
   if [[ "$ASUMIR_ROLE" == true ]]; then
-    ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/DBDumpRole"
+    ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/DBDumpRoleGH"
     assume_role "$ROLE_ARN"
   fi
 

@@ -72,14 +72,11 @@ Cada base de datos requiere un secreto con este **formato JSON**:
 El repositorio desde el que se ejecute la accion debe tener configurados los siquientes secretos por entorno disponible: ROLE_NAME_(entorno), SECRET_NAME_(entorno) y ACCOUNT_ID_(entorno). A continuacion un ejemplo con tres entornos:
 | Entorno      | Secreto           | Descripcion                                          |
 | ------------ | ----------------- | ---------------------------------------------------- |
-| PRO          | `ROLE_NAME_PRO`   | ARN completo del ROL de IAM a asumir por el action   |
-|              | `SECRET_NAME_PRO` | Nombre del Secreto de AWS Secret Manager para usar   |
+| PRO          | `SECRET_NAME_PRO` | Nombre del Secreto de AWS Secret Manager para usar   |
 |              | `ACCOUNT_ID_PRO`  | ID de la cuenta de AWS donde se encuentra el entorno |
-| STG          | `ROLE_NAME_STG`   | ARN completo del ROL de IAM a asumir por el action   |
-|              | `SECRET_NAME_STG` | Nombre del Secreto de AWS Secret Manager para usar   |
+| STG          | `SECRET_NAME_STG` | Nombre del Secreto de AWS Secret Manager para usar   |
 |              | `ACCOUNT_ID_STG`  | ID de la cuenta de AWS donde se encuentra el entorno |
-| DEV          | `ROLE_NAME_DEV`   | ARN completo del ROL de IAM a asumir por el action   |
-|              | `SECRET_NAME_DEV` | Nombre del Secreto de AWS Secret Manager para usar   |
+| DEV          | `SECRET_NAME_DEV` | Nombre del Secreto de AWS Secret Manager para usar   |
 |              | `ACCOUNT_ID_DEV`  | ID de la cuenta de AWS donde se encuentra el entorno |
 
 El job que use esta Action debe:

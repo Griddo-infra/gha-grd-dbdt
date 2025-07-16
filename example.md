@@ -39,9 +39,6 @@ env:
   ACCOUNT_ID_PRO: ${{ secrets.ACCOUNT_ID_PRO }}
   ACCOUNT_ID_STG: ${{ secrets.ACCOUNT_ID_STG }}
   ACCOUNT_ID_DEV: ${{ secrets.ACCOUNT_ID_DEV }}
-  ROLE_NAME_PRO: ${{ secrets.ROLE_NAME_PRO }}
-  ROLE_NAME_STG: ${{ secrets.ROLE_NAME_STG }}
-  ROLE_NAME_DEV: ${{ secrets.ROLE_NAME_DEV }}
   SECRET_NAME_PRO: ${{ secrets.SECRET_NAME_PRO }}
   SECRET_NAME_STG: ${{ secrets.SECRET_NAME_STG }}
   SECRET_NAME_DEV: ${{ secrets.SECRET_NAME_DEV }}
@@ -64,17 +61,17 @@ jobs:
           case "${{ github.event.inputs.origen }}" in
             pro)
               echo "ORIGEN_ACCOUNT_ID=${ACCOUNT_ID_PRO}" >> $GITHUB_ENV
-              echo "ORIGEN_ROLE=arn:aws:iam::${ACCOUNT_ID_PRO}:role/${ROLE_NAME_PRO}" >> $GITHUB_ENV
+              echo "ORIGEN_ROLE=arn:aws:iam::${ACCOUNT_ID_PRO}:role/DBDumpRoleGH" >> $GITHUB_ENV
               echo "ORIGEN_SECRET=${SECRET_NAME_PRO}" >> $GITHUB_ENV
               ;;
             stg)
               echo "ORIGEN_ACCOUNT_ID=${ACCOUNT_ID_STG}" >> $GITHUB_ENV
-              echo "ORIGEN_ROLE=arn:aws:iam::${ACCOUNT_ID_STG}:role/${ROLE_NAME_STG}" >> $GITHUB_ENV
+              echo "ORIGEN_ROLE=arn:aws:iam::${ACCOUNT_ID_STG}:role/DBDumpRoleGH" >> $GITHUB_ENV
               echo "ORIGEN_SECRET=${SECRET_NAME_STG}" >> $GITHUB_ENV
               ;;
             dev)
               echo "ORIGEN_ACCOUNT_ID=${ACCOUNT_ID_DEV}" >> $GITHUB_ENV
-              echo "ORIGEN_ROLE=arn:aws:iam::${ACCOUNT_ID_DEV}:role/${ROLE_NAME_DEV}" >> $GITHUB_ENV
+              echo "ORIGEN_ROLE=arn:aws:iam::${ACCOUNT_ID_DEV}:role/DBDumpRoleGH" >> $GITHUB_ENV
               echo "ORIGEN_SECRET=${SECRET_NAME_DEV}" >> $GITHUB_ENV
               ;;
           esac
@@ -82,11 +79,11 @@ jobs:
           # Destino (solo si aplica)
           if [[ "${{ github.event.inputs.destino }}" == "stg" ]]; then
             echo "DESTINO_ACCOUNT_ID=${ACCOUNT_ID_STG}" >> $GITHUB_ENV
-            echo "DESTINO_ROLE=arn:aws:iam::${ACCOUNT_ID_STG}:role/${ROLE_NAME_STG}" >> $GITHUB_ENV
+            echo "DESTINO_ROLE=arn:aws:iam::${ACCOUNT_ID_STG}:role/DBDumpRoleGH" >> $GITHUB_ENV
             echo "DESTINO_SECRET=${SECRET_NAME_STG}" >> $GITHUB_ENV
           elif [[ "${{ github.event.inputs.destino }}" == "dev" ]]; then
             echo "DESTINO_ACCOUNT_ID=${ACCOUNT_ID_DEV}" >> $GITHUB_ENV
-            echo "DESTINO_ROLE=arn:aws:iam::${ACCOUNT_ID_DEV}:role/${ROLE_NAME_DEV}" >> $GITHUB_ENV
+            echo "DESTINO_ROLE=arn:aws:iam::${ACCOUNT_ID_DEV}:role/DBDumpRoleGH" >> $GITHUB_ENV
             echo "DESTINO_SECRET=${SECRET_NAME_DEV}" >> $GITHUB_ENV
           fi
 
@@ -102,7 +99,7 @@ jobs:
           sudo apt-get install -y awscli jq mysql-client gzip curl
 
       - name: 'Volcado y restauración de RDS'
-        uses: Griddo-infra/gha-grd-dbdt@0.3
+        uses: Griddo-infra/gha-grd-dbdt@0.4
         with:
           mode: ${{ github.event.inputs.modo }}
           aws_account_origin: ${{ env.ORIGEN_ACCOUNT_ID }}
