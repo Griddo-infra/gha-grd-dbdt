@@ -5,14 +5,8 @@ inputs:
   mode:
     description: 'Modo de operación: extraer | restaurar | completo'
     required: true
-  aws_account_origin:
-    description: 'ID de cuenta AWS de origen (para extraer o completo)'
-    required: false
   secret_origin:
     description: 'Nombre del secreto de origen en AWS Secrets Manager'
-    required: false
-  aws_account_dest:
-    description: 'ID de cuenta AWS de destino (para restaurar o completo)'
     required: false
   secret_dest:
     description: 'Nombre del secreto de destino en AWS Secrets Manager'
@@ -50,21 +44,17 @@ runs:
         case "${{ inputs.mode }}" in
           extraer)
             AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh extraer \
-              "${{ inputs.aws_account_origin }}" \
               "${{ inputs.secret_origin }}" \
               "${{ inputs.ttl }}"
             ;;
           restaurar)
             AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh restaurar \
-              "${{ inputs.aws_account_dest }}" \
               "${{ inputs.secret_dest }}" \
               "${{ inputs.presigned_url }}"
             ;;
           completo)
             AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh completo \
-              "${{ inputs.aws_account_origin }}" \
               "${{ inputs.secret_origin }}" \
-              "${{ inputs.aws_account_dest }}" \
               "${{ inputs.secret_dest }}" \
               "${{ inputs.ttl }}"
             ;;
