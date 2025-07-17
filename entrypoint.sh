@@ -7,9 +7,9 @@ _CLEANED_UP=0
 
 print_usage() {
   echo "Uso:"
-  echo "  $0 extraer <AWS_ACCOUNT_ID_ORIGEN> <SECRETO_ORIGEN> [<TTL_SEGUNDOS>]"
-  echo "  $0 restaurar <AWS_ACCOUNT_ID_DESTINO> <SECRETO_DESTINO> <URL_PRESIGNED>"
-  echo "  $0 completo <AWS_ACCOUNT_ID_ORIGEN> <SECRETO_ORIGEN> <AWS_ACCOUNT_ID_DESTINO> <SECRETO_DESTINO> [<TTL_SEGUNDOS>]"
+  echo "  $0 extraer <SECRETO_ORIGEN> [<TTL_SEGUNDOS>]"
+  echo "  $0 restaurar <SECRETO_DESTINO> <URL_PRESIGNED>"
+  echo "  $0 completo <SECRETO_ORIGEN> <SECRETO_DESTINO> [<TTL_SEGUNDOS>]"
   exit 1
 }
 
@@ -21,7 +21,6 @@ MODE=$1
 OPENED_SG_ID=""
 OPENED_MY_IP=""
 PRESIGNED_URL=""
-ASUMIR_ROLE=true
 TMP_DIR=$(mktemp -d)
 DUMP_FILE="$TMP_DIR/dump.sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
@@ -39,14 +38,6 @@ clean_up() {
     if [[ -f "$DUMP_FILE" ]]; then rm -f "$DUMP_FILE"; fi
     if [[ -f "$DUMP_FILE_GZ" ]]; then rm -f "$DUMP_FILE_GZ"; fi
     rm -rf "$TMP_DIR"  
-}
-
-assume_role() {
-  local role_arn=$1
-  CREDS_JSON=$(aws sts assume-role --role-arn "$role_arn" --role-session-name dbdt-session --duration-seconds 3600)
-  export AWS_ACCESS_KEY_ID=$(echo "$CREDS_JSON" | jq -r '.Credentials.AccessKeyId')
-  export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS_JSON" | jq -r '.Credentials.SecretAccessKey')
-  export AWS_SESSION_TOKEN=$(echo "$CREDS_JSON" | jq -r '.Credentials.SessionToken')
 }
 
 get_secret() {
@@ -85,12 +76,8 @@ filter_dump() {
 }
 
 modo_extraer() {
-  local AWS_ACCOUNT_ID=$1
-  local SECRET_NAME=$2
-  local TTL=${3:-7200}
-  ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/DBDumpRoleGH"
-
-#  assume_role "$ROLE_ARN"
+  local SECRET_NAME=$1
+  local TTL=${2:-7200}
 
   SECRET_JSON=$(get_secret "$SECRET_NAME")
   ENDPOINT=$(echo "$SECRET_JSON" | jq -r '.endpoint')
@@ -111,25 +98,21 @@ modo_extraer() {
   gzip "$DUMP_FILE"
 
   FILENAME="dump_$(date +%Y%m%d_%H%M%S).sql.gz"
-  aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME" --metadata-directive REPLACE --content-disposition "attachment; filename=\"$FILENAME\""
+  aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$FILENAME" \
+    --region "$AWS_REGION" --metadata-directive REPLACE \
+    --content-disposition "attachment; filename=\"$FILENAME\""
 
-  PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL" --output text)
+  PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL" --region "$AWS_REGION" --output text)
   echo "presigned_url=$PRESIGNED_URL" >> $GITHUB_OUTPUT
 }
 
 modo_restaurar() {
-  local AWS_ACCOUNT_ID=$1
-  local SECRET_NAME=$2
-  local URL_PRESIGNED=$3
+  local SECRET_NAME=$1
+  local URL_PRESIGNED=$2
 
   if [[ "$SECRET_NAME" == *_pro* ]]; then
     echo "ERROR: No está permitido usar un entorno _pro como destino de restauración."
     exit 1
-  fi
-
-  if [[ "$ASUMIR_ROLE" == true ]]; then
-    ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/DBDumpRoleGH"
-    assume_role "$ROLE_ARN"
   fi
 
   SECRET_JSON=$(get_secret "$SECRET_NAME")
@@ -154,42 +137,37 @@ modo_restaurar() {
 }
 
 modo_completo() {
-  if [[ $# -lt 4 ]]; then
-    echo "ERROR: modo completo requiere: <AWS_ACCOUNT_ID_ORIGEN> <SECRETO_ORIGEN> <AWS_ACCOUNT_ID_DESTINO> <SECRETO_DESTINO> [<TTL_SEGUNDOS>]"
+  if [[ $# -lt 2 ]]; then
+    echo "ERROR: modo completo requiere: <SECRETO_ORIGEN> <SECRETO_DESTINO> [<TTL_SEGUNDOS>]"
     exit 1
   fi
 
-  local AWS_ACCOUNT_ID_ORIGEN=$1
-  local SECRETO_ORIGEN=$2
-  local AWS_ACCOUNT_ID_DESTINO=$3
-  local SECRETO_DESTINO=$4
-  local TTL=${5:-7200}
+  local SECRETO_ORIGEN=$1
+  local SECRETO_DESTINO=$2
+  local TTL=${3:-7200}
 
   if [[ "$SECRETO_DESTINO" == *_pro* ]]; then
     echo "ERROR: No está permitido usar un entorno _pro como destino de restauración."
     exit 1
   fi
 
-  modo_extraer "$AWS_ACCOUNT_ID_ORIGEN" "$SECRETO_ORIGEN" "$TTL"
+  modo_extraer "$SECRETO_ORIGEN" "$TTL"
 
-  modo_restaurar "$AWS_ACCOUNT_ID_DESTINO" "$SECRETO_DESTINO" "$PRESIGNED_URL"
+  modo_restaurar "$SECRETO_DESTINO" "$PRESIGNED_URL"
 }
 
 case "$MODE" in
   extraer)
-    if [[ $# -lt 3 ]]; then print_usage; fi  
-    modo_extraer "$2" "$3" "${4:-7200}"
+    if [[ $# -lt 2 ]]; then print_usage; fi  
+    modo_extraer "$2" "${3:-7200}"
     ;;
   restaurar)
-    if [[ $# -lt 4 ]]; then print_usage; fi  
-    modo_restaurar "$2" "$3" "$4"
+    if [[ $# -lt 3 ]]; then print_usage; fi  
+    modo_restaurar "$2" "$3"
     ;;
   completo)
-    if [[ $# -lt 5 ]]; then print_usage; fi  
-    if [[ "$2" == "$4" ]]; then
-      ASUMIR_ROLE=false
-    fi
-    modo_completo "$2" "$3" "$4" "$5" "${6:-7200}"
+    if [[ $# -lt 3 ]]; then print_usage; fi  
+    modo_completo "$2" "$3" "${4:-7200}"
     ;;
   *)
     print_usage

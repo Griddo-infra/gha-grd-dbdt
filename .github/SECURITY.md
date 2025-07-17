@@ -4,7 +4,7 @@
 
 Si encuentras alguna vulnerabilidad en este repositorio, por favor notifícalo de forma **privada** a través del siguiente canal:
 
-- **Correo:** infra@griddo.io
+- **Correo:** <infra@griddo.io>
 - **No abras Issues públicos sobre vulnerabilidades.**
 
 ---
@@ -41,5 +41,5 @@ Si encuentras alguna vulnerabilidad en este repositorio, por favor notifícalo d
 ---
 
 ## 🔔 Notificación Responsable
-Cumplimos con un plazo máximo de **30 días** para evaluar, priorizar y aplicar mitigaciones ante cualquier vulnerabilidad notificada.
 
+Cumplimos con un plazo máximo de **30 días** para evaluar, priorizar y aplicar mitigaciones ante cualquier vulnerabilidad notificada.

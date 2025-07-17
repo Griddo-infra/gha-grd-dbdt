@@ -1,6 +1,6 @@
 name: 'Volcado y restauración de RDS'
 description: 'Volcado y restauración de MySQL/MariaDB RDS a través de Secrets Manager y S3'
-author: 'Orencio Ramirez'
+author: 'Orencio Ramírez'
 inputs:
   mode:
     description: 'Modo de operación: extraer | restaurar | completo'
@@ -24,6 +24,10 @@ inputs:
     description: 'TTL de la URL pre-firmada en segundos'
     required: false
     default: '7200'
+  aws_region:
+    description: 'Región AWS (eu-south-2 por ejemplo)'
+    required: true
+
 outputs:
   presigned_url:
     description: "URL pre-firmada generada tras el volcado"
@@ -45,19 +49,19 @@ runs:
         chmod +x ${{ github.action_path }}/entrypoint.sh
         case "${{ inputs.mode }}" in
           extraer)
-            ${{ github.action_path }}/entrypoint.sh extraer \
+            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh extraer \
               "${{ inputs.aws_account_origin }}" \
               "${{ inputs.secret_origin }}" \
               "${{ inputs.ttl }}"
             ;;
           restaurar)
-            ${{ github.action_path }}/entrypoint.sh restaurar \
+            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh restaurar \
               "${{ inputs.aws_account_dest }}" \
               "${{ inputs.secret_dest }}" \
               "${{ inputs.presigned_url }}"
             ;;
           completo)
-            ${{ github.action_path }}/entrypoint.sh completo \
+            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh completo \
               "${{ inputs.aws_account_origin }}" \
               "${{ inputs.secret_origin }}" \
               "${{ inputs.aws_account_dest }}" \

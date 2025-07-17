@@ -20,13 +20,13 @@ Antes de utilizar esta Action, debes contar con:
 
 ### 1️⃣ Infraestructura y cuentas AWS
 
-  - **Dos cuentas AWS** si planeas extraer de una y restaurar en otra.
-  - **Roles IAM creados en cada cuenta**, con políticas necesarias para:
-    - Acceder a Secrets Manager.
-    - Ejecutar `rds:DescribeDBInstances`.
-    - Gestionar reglas de seguridad (`ec2:AuthorizeSecurityGroupIngress` y `ec2:RevokeSecurityGroupIngress`).
-    - Ejecutar `s3:PutObject`, `s3:GetObject`, y `s3:CreatePresignedUrl`.
-    - Ejecutar `sts:AssumeRole`.
+- **Dos cuentas AWS** si planeas extraer de una y restaurar en otra.
+- **Roles IAM creados en cada cuenta**, con políticas necesarias para:
+  - Acceder a Secrets Manager.
+  - Ejecutar `rds:DescribeDBInstances`.
+  - Gestionar reglas de seguridad (`ec2:AuthorizeSecurityGroupIngress` y `ec2:RevokeSecurityGroupIngress`).
+  - Ejecutar `s3:PutObject`, `s3:GetObject`, y `s3:CreatePresignedUrl`.
+  - Ejecutar `sts:AssumeRole`.
 
 Ejemplo de **ARN del rol** esperado:
 
@@ -62,7 +62,6 @@ Cada base de datos requiere un secreto con este **formato JSON**:
 | `db_instance_identifier`| Identificador RDS (se utiliza para abrir/cerrar acceso temporal) |
 | `s3_bucket`             | Bucket S3 destino del dump                                       |
 
-
   **Importante**: El bucket S3 debe existir previamente y el rol `DBDumpRole` debe tener permisos para operar sobre él.
 
 ---
@@ -70,6 +69,7 @@ Cada base de datos requiere un secreto con este **formato JSON**:
 ### 3️⃣ Entorno CI/CD en GitHub Actions
 
 El repositorio desde el que se ejecute la accion debe tener configurados los siquientes secretos por entorno disponible: ROLE_NAME_(entorno), SECRET_NAME_(entorno) y ACCOUNT_ID_(entorno). A continuacion un ejemplo con tres entornos:
+
 | Entorno      | Secreto           | Descripcion                                          |
 | ------------ | ----------------- | ---------------------------------------------------- |
 | PRO          | `SECRET_NAME_PRO` | Nombre del Secreto de AWS Secret Manager para usar   |
@@ -81,9 +81,8 @@ El repositorio desde el que se ejecute la accion debe tener configurados los siq
 
 El job que use esta Action debe:
 
-  - Configurar credenciales AWS (por ejemplo, con `aws-actions/configure-aws-credentials`).
-  - Disponer de los binarios instalados en el runner (`awscli`, `jq`, `mysql`, `mysqldump`, `gzip`, `curl`).
-  - 
+- Configurar credenciales AWS (por ejemplo, con `aws-actions/configure-aws-credentials`).
+- Disponer de los binarios instalados en el runner (`awscli`, `jq`, `mysql`, `mysqldump`, `gzip`, `curl`).
 
 Si usas `ubuntu-latest`, instala estas dependencias en un paso previo:
 
@@ -106,15 +105,15 @@ Si usas `ubuntu-latest`, instala estas dependencias en un paso previo:
 | `ttl`           | Opcional    | Tiempo en segundos de validez de la URL pre-firmadas (por defecto 7200, obligatorio en `restaurar`). |
 | `presigned_url` | Opcional    | URL presignada del dump a restaurar. obligatorio en `restaurar`. Ignorada en otros modos.            |
 
-
 ---
 
 ### 📊 Tabla de combinaciones requeridas por modo
+
 | Modo      | origen | destino | presigned_url | ttl      |
 | --------- | -------| ------- | ------------- | -------- |
 | extraer   |   ✅   |         |               | opcional |
-| restaurar	|        |   ✅    |     ✅        |          |
-| completo	|   ✅   |   ✅    |               | opcional |
+| restaurar |        |   ✅    |     ✅        |          |
+| completo  |   ✅   |   ✅    |               | opcional |
 
 ---
 
@@ -146,11 +145,12 @@ La Action opera de la siguiente forma según el modo:
   6. Restaura el dump en la base especificada.
   7. Cierra el acceso temporal.
 
---- 
+---
 
 ### 🟣 Modo `completo`
 
 Combina ambos pasos:
+
   1. Primero ejecuta extraer.
   2. Luego toma la URL generada y ejecuta restaurar.
 
@@ -160,10 +160,11 @@ Combina ambos pasos:
 
 ## 🧩 Ejemplos
 
-### Ejemplo del workflow apicado a un repo:
+### Ejemplo del workflow apicado a un repo
+
 En el este [enlace](example.md) se encuentra un ejemplo completo del workflow tal y como se aplicaria en un repositorio real. En el caso de que los secretos arriba mencionados estuvieran configurados correctamente, funcionaria sin problemas.
 
-### Ejemplos prácticos:
+### Ejemplos prácticos
 
 | Origen | Destino | Modo        | Comentario                                |
 | ------ | ------- | ----------- | ----------------------------------------- |
