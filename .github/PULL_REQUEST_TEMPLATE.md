@@ -29,6 +29,6 @@ Por favor, revisa y marca cada punto antes de solicitar la revisión de este PR.
 
 ---
 
-### Comentarios adicionales:
+### Comentarios adicionales
 
 (Puedes explicar aquí cualquier aclaración para los revisores)
