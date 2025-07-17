@@ -102,7 +102,7 @@ modo_extraer() {
     --region "$AWS_REGION" --metadata-directive REPLACE \
     --content-disposition "attachment; filename=\"$FILENAME\""
 
-  PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --expires-in "$TTL" --region "$AWS_REGION" --output text)
+  PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET/$FILENAME" --endpoint-url "https://s3.${AWS_REGION}.amazonaws.com" --expires-in "$TTL" --region "$AWS_REGION" --output text)
   echo "presigned_url=$PRESIGNED_URL" >> $GITHUB_OUTPUT
 }
 
