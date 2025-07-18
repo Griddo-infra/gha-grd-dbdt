@@ -134,9 +134,11 @@ modo_restaurar() {
   filter_dump "$DUMP_FILE" "$FILTERED_DUMP"
 
   open_temporary_access "$DB_INSTANCE_ID_DEST"
-
-  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" --verbose < "$FILTERED_DUMP"
-
+  
+  echo "🚀 Iniciando restauración..."
+  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" --show-warnings < "$FILTERED_DUMP"
+  echo "✅ Restauración completada"
+  
   close_temporary_access "$OPENED_SG_ID" "$OPENED_MY_IP"
 }
 
