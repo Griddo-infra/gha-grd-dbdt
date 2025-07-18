@@ -28,16 +28,18 @@ DUMP_FILE_GZ="$DUMP_FILE.gz"
 trap clean_up EXIT
 
 clean_up() {
-    if [[ $_CLEANED_UP -eq 1 ]]; then
-        return
+  if [[ $_CLEANED_UP -eq 1 ]]; then
+      return
+  fi
+  _CLEANED_UP=1
+  if [[ -n "$OPENED_SG_ID" && -n "$OPENED_MY_IP" ]]; then
+    if ! aws ec2 revoke-security-group-ingress --group-id "$OPENED_SG_ID" --protocol tcp --port 3306 --cidr "$OPENED_MY_IP" --output text; then
+      echo "⚠️  No se pudo revocar la regla (posiblemente ya no existe)"
     fi
-    _CLEANED_UP=1
-    if [[ -n "$OPENED_SG_ID" && -n "$OPENED_MY_IP" ]]; then
-        aws ec2 revoke-security-group-ingress --group-id "$OPENED_SG_ID" --protocol tcp --port 3306 --cidr "$OPENED_MY_IP" --output text || true
-    fi
-    if [[ -f "$DUMP_FILE" ]]; then rm -f "$DUMP_FILE"; fi
-    if [[ -f "$DUMP_FILE_GZ" ]]; then rm -f "$DUMP_FILE_GZ"; fi
-    rm -rf "$TMP_DIR"  
+  fi
+  if [[ -f "$DUMP_FILE" ]]; then rm -f "$DUMP_FILE"; fi
+  if [[ -f "$DUMP_FILE_GZ" ]]; then rm -f "$DUMP_FILE_GZ"; fi
+  rm -rf "$TMP_DIR"  
 }
 
 get_secret() {
@@ -63,7 +65,9 @@ open_temporary_access() {
 
 close_temporary_access() {
   if [[ -n "$OPENED_SG_ID" && -n "$OPENED_MY_IP" ]]; then
-    aws ec2 revoke-security-group-ingress --group-id "$OPENED_SG_ID" --protocol tcp --port 3306 --cidr "$OPENED_MY_IP" --output text || true
+    if ! aws ec2 revoke-security-group-ingress --group-id "$OPENED_SG_ID" --protocol tcp --port 3306 --cidr "$OPENED_MY_IP" --output text; then
+      echo "⚠️  No se pudo revocar la regla (posiblemente ya no existe)"
+    fi
   fi
   OPENED_SG_ID=""
   OPENED_MY_IP=""
@@ -131,7 +135,7 @@ modo_restaurar() {
 
   open_temporary_access "$DB_INSTANCE_ID_DEST"
 
-  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" < "$FILTERED_DUMP"
+  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" --verbose < "$FILTERED_DUMP"
 
   close_temporary_access "$OPENED_SG_ID" "$OPENED_MY_IP"
 }
