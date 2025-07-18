@@ -67,6 +67,8 @@ close_temporary_access() {
   if [[ -n "$OPENED_SG_ID" && -n "$OPENED_MY_IP" ]]; then
     if ! aws ec2 revoke-security-group-ingress --group-id "$OPENED_SG_ID" --protocol tcp --port 3306 --cidr "$OPENED_MY_IP" --output text; then
       echo "⚠️  No se pudo revocar la regla (posiblemente ya no existe)"
+    else
+      echo "🔒 Acceso temporal cerrado para $OPENED_MY_IP"
     fi
   fi
   OPENED_SG_ID=""
@@ -138,7 +140,7 @@ modo_restaurar() {
   echo "🚀 Iniciando restauración..."
   mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" --show-warnings < "$FILTERED_DUMP"
   echo "✅ Restauración completada"
-  
+
   close_temporary_access "$OPENED_SG_ID" "$OPENED_MY_IP"
 }
 
