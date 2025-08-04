@@ -31,7 +31,7 @@ Antes de utilizar esta Action, debes contar con:
 Ejemplo de **ARN del rol** esperado:
 
 ~~~ruby
-arn:aws:iam::<ACCOUNT_ID>:role/DBDumpRole
+arn:aws:iam::<ACCOUNT_ID>:role/DBDumpRoleGH
 ~~~
 
 El usuario o rol que ejecuta esta Action en GitHub debe contar con permisos para **asumir este rol** vía `sts:AssumeRole`.
