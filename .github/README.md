@@ -100,7 +100,7 @@ Si usas `ubuntu-latest`, instala estas dependencias en un paso previo:
 | Nombre          | Requerido   | Descripción                                                                                          |
 | --------------- | ----------- | -----------------------------------------------------------------------------------------------------|
 | `modo`          |    ✅ Sí    | Modo de operación: `extraer`, `restaurar` o `completo`.                                              |
-| `origen`        |    ✅ Sí    | Entorno de origen.                                                                                   |
+| `origen`        | Condicional | Entorno de origen (obligatorio en `extraer` y `completo`).                                           |
 | `destino`       | Condicional | Entorno de destino (obligatorio en `restaurar` y `completo`).                                        |
 | `ttl`           | Opcional    | Tiempo en segundos de validez de la URL pre-firmadas (por defecto 7200, obligatorio en `restaurar`). |
 | `presigned_url` | Opcional    | URL presignada del dump a restaurar. obligatorio en `restaurar`. Ignorada en otros modos.            |
