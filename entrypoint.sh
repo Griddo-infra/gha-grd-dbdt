@@ -96,7 +96,7 @@ modo_extraer() {
   open_temporary_access "$DB_INSTANCE_ID"
 
   mysqldump --verbose --single-transaction --quick --skip-lock-tables --set-gtid-purged=OFF \
-    --ignore-table="${DATABASE}.revisions" --ignore-table="${DATABASE}.domains" \
+    --ignore-table="${DATABASE}.revisions" --ignore-table="${DATABASE}.domains" --ignore-table="${DATABASE}.log_alerts" \
     -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" "$DATABASE" > "$DUMP_FILE"
 
   close_temporary_access "$OPENED_SG_ID" "$OPENED_MY_IP"
