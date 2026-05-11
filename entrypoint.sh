@@ -75,12 +75,6 @@ close_temporary_access() {
   OPENED_MY_IP=""
 }
 
-filter_dump() {
-  local input_file=$1
-  local output_file=$2
-  grep -v -E "INSERT INTO \`?users\`?.*'(admin|bot)'" "$1" > "$2"
-}
-
 modo_extraer() {
   local SECRET_NAME=$1
   local TTL=${2:-7200}
@@ -96,7 +90,8 @@ modo_extraer() {
   open_temporary_access "$DB_INSTANCE_ID"
 
   mysqldump --verbose --single-transaction --quick --skip-lock-tables --set-gtid-purged=OFF \
-    --ignore-table="${DATABASE}.revisions" --ignore-table="${DATABASE}.domains" --ignore-table="${DATABASE}.log_alerts" \
+    --ignore-table="${DATABASE}.revisions" --ignore-table="${DATABASE}.log_alerts" \
+    --ignore-table="${DATABASE}.distributor_cache" --ignore-table="${DATABASE}.distributor_cache_structured_data" \
     -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" "$DATABASE" > "$DUMP_FILE"
 
   close_temporary_access "$OPENED_SG_ID" "$OPENED_MY_IP"
@@ -132,14 +127,25 @@ modo_restaurar() {
 
   gzip -d "$DUMP_FILE_GZ"
 
-  FILTERED_DUMP="$TMP_DIR/dump_filtered.sql"
-  filter_dump "$DUMP_FILE" "$FILTERED_DUMP"
-
   open_temporary_access "$DB_INSTANCE_ID_DEST"
-  
+
+  PRESERVE_SQL="$TMP_DIR/preserve.sql"
+  : > "$PRESERVE_SQL"
+
+  echo "💾 Guardando valores a preservar del destino..."
+  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" -B -N -e \
+    "SELECT CONCAT('UPDATE domains SET domain_url = ', QUOTE(domain_url), ' WHERE domain_slug = ', QUOTE(domain_slug), ';') FROM domains WHERE domain_slug IS NOT NULL AND domain_url IS NOT NULL;" >> "$PRESERVE_SQL"
+  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" -B -N -e \
+    "SELECT CONCAT('UPDATE user SET email = ', IFNULL(QUOTE(email), 'NULL'), ', password = ', IFNULL(QUOTE(password), 'NULL'), ' WHERE name = ''Administrator'';') FROM user WHERE name = 'Administrator';
+     SELECT CONCAT('UPDATE user SET email = ', IFNULL(QUOTE(email), 'NULL'), ', password = ', IFNULL(QUOTE(password), 'NULL'), ' WHERE bot = 1;') FROM user WHERE bot = 1;" >> "$PRESERVE_SQL"
+
   echo "🚀 Iniciando restauración..."
-  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" --show-warnings < "$FILTERED_DUMP"
+  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" --show-warnings < "$DUMP_FILE"
   echo "✅ Restauración completada"
+
+  echo "🔁 Reaplicando valores preservados (domain_url, admin/bot)..."
+  mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" --show-warnings < "$PRESERVE_SQL"
+  echo "✅ Valores preservados reaplicados"
 
   close_temporary_access "$OPENED_SG_ID" "$OPENED_MY_IP"
 }
