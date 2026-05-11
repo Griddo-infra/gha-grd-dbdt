@@ -183,3 +183,37 @@ En el este [enlace](example.md) se encuentra un ejemplo completo del workflow ta
 - ✅ **Los volcados quedan en S3** solo durante el tiempo definido por el TTL y **maximo por 24 Horas**.
 - ✅ **El acceso al puerto MySQL** se abre exclusivamente al runner y **se cierra inmediatamente tras finalizar**.
 - ✅ Los ficheros locales se eliminan y los runners son efimeros.
+
+---
+
+## 🏷️ Versionado y tags
+
+Esta Action se publica con dos tipos de tag:
+
+- **Tags exactas por release** (ej. `v0.4.0`, `v0.4.1`): apuntan a un commit concreto y son inmutables. Úsalas si necesitas reproducibilidad estricta.
+- **Tags flotantes por minor** (ej. `v0.4`): apuntan al último patch publicado dentro de ese minor. Úsalas en los workflows de los clientes para recibir parches automáticamente sin tener que abrir un PR por cada bump.
+
+Referencia recomendada en los workflows:
+
+~~~yaml
+uses: Griddo-infra/gha-grd-dbdt@v0.4
+~~~
+
+### Mantenimiento de tags flotantes
+
+Cuando se publica una nueva versión patch (por ejemplo `v0.4.1`), hay que **mover la tag flotante** correspondiente al commit del nuevo release:
+
+~~~bash
+# desde el repo del action
+git tag -f v0.4 v0.4.1
+git push -f origin v0.4
+~~~
+
+Al crear una nueva versión minor (por ejemplo `v0.5.0`), se crea una nueva tag flotante:
+
+~~~bash
+git tag v0.5 v0.5.0
+git push origin v0.5
+~~~
+
+⚠️ Las tags flotantes se mueven con `--force`; las tags exactas (`vX.Y.Z`) **nunca** deben moverse.
