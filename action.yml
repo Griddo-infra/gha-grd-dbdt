@@ -3,7 +3,7 @@ description: 'Volcado y restauración de MySQL/MariaDB RDS a través de Secrets 
 author: 'Orencio Ramírez'
 inputs:
   mode:
-    description: 'Modo de operación: extraer | restaurar | completo'
+    description: 'Modo de operación: extraer | restaurar'
     required: true
   secret_origin:
     description: 'Nombre del secreto de origen en AWS Secrets Manager'
@@ -59,12 +59,6 @@ runs:
             AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh restaurar \
               "${{ inputs.secret_dest }}" \
               "${{ inputs.presigned_url }}"
-            ;;
-          completo)
-            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh completo \
-              "${{ inputs.secret_origin }}" \
-              "${{ inputs.secret_dest }}" \
-              "${{ inputs.ttl }}"
             ;;
           *)
             echo "Modo no soportado: ${{ inputs.mode }}"

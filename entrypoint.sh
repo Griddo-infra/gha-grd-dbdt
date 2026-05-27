@@ -9,18 +9,16 @@ print_usage() {
   echo "Uso:"
   echo "  $0 extraer <SECRETO_ORIGEN> [<TTL_SEGUNDOS>]"
   echo "  $0 restaurar <SECRETO_DESTINO> <URL_PRESIGNED>"
-  echo "  $0 completo <SECRETO_ORIGEN> <SECRETO_DESTINO> [<TTL_SEGUNDOS>]"
   exit 1
 }
 
-if [[ $# -lt 3 ]]; then
+if [[ $# -lt 2 ]]; then
   print_usage
 fi
 
 MODE=$1
 OPENED_SG_ID=""
 OPENED_MY_IP=""
-PRESIGNED_URL=""
 TMP_DIR=$(mktemp -d)
 DUMP_FILE="$TMP_DIR/dump.sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
@@ -205,38 +203,6 @@ modo_restaurar() {
   echo "══════════════════════════════════════════════════════════"
 }
 
-modo_completo() {
-  if [[ $# -lt 2 ]]; then
-    echo "❌ ERROR: modo completo requiere: <SECRETO_ORIGEN> <SECRETO_DESTINO> [<TTL_SEGUNDOS>]"
-    exit 1
-  fi
-
-  local SECRETO_ORIGEN=$1
-  local SECRETO_DESTINO=$2
-  local TTL=${3:-7200}
-
-  echo "╔══════════════════════════════════════════════════════════╗"
-  echo "║  🔄 MODO COMPLETO: extracción + restauración             ║"
-  echo "╚══════════════════════════════════════════════════════════╝"
-  echo "   • Origen:  $SECRETO_ORIGEN"
-  echo "   • Destino: $SECRETO_DESTINO"
-  echo "   • TTL:     ${TTL}s"
-
-  if [[ "$SECRETO_DESTINO" == *_pro* ]]; then
-    echo "❌ ERROR: No está permitido usar un entorno _pro como destino de restauración."
-    exit 1
-  fi
-
-  modo_extraer "$SECRETO_ORIGEN" "$TTL"
-
-  modo_restaurar "$SECRETO_DESTINO" "$PRESIGNED_URL"
-
-  echo ""
-  echo "╔══════════════════════════════════════════════════════════╗"
-  echo "║  🎉 MODO COMPLETO FINALIZADO CON ÉXITO                   ║"
-  echo "╚══════════════════════════════════════════════════════════╝"
-}
-
 echo "🟢 Iniciando entrypoint en modo: $MODE"
 
 case "$MODE" in
@@ -247,10 +213,6 @@ case "$MODE" in
   restaurar)
     if [[ $# -lt 3 ]]; then print_usage; fi
     modo_restaurar "$2" "$3"
-    ;;
-  completo)
-    if [[ $# -lt 3 ]]; then print_usage; fi
-    modo_completo "$2" "$3" "${4:-7200}"
     ;;
   *)
     print_usage

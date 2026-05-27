@@ -60,7 +60,7 @@ env:
 # 👇 AGREGA TANTOS ENTORNOS COMO NECESITES
 # Necesitaras IAM_ROLE y SECRET_NAME para Instancia
 # y entorno especifico, en caso de que solo sea una
-# cuenta, los tres IAM_ROLE, apuntan al mismo secreto.
+# cuenta, los IAM_ROLE apuntan al mismo role.
   IAM_ROLE_PRO: ${{ secrets.IAM_ROLE_PRO }}
   IAM_ROLE_STG: ${{ secrets.IAM_ROLE_STG }}
   IAM_ROLE_DEV: ${{ secrets.IAM_ROLE_DEV }}
@@ -71,21 +71,18 @@ env:
 jobs:
   dbdt:
     runs-on: grd-it-sqldumper # Puede funcionar en ubuntu-latest
-    env:
-      MULTI_ACCOUNT: false # cambia esto a true si origen/destino son cuentas distintas
     steps:
       # -------------------------------------
       # VALIDACION ORIGEN/DESTINO DISTINTOS
-      # DESACTIVADO TEMPORALMENTE PARA PRUEBAS
       # -------------------------------------
-       - name: Validar origen y destino diferentes
-         if: ${{ (github.event.inputs.modo == 'restaurar' || github.event.inputs.modo == 'completo') && github.event.inputs.origen == github.event.inputs.destino }}
-         run: |
-           echo "❌ Error: El origen y destino no pueden ser el mismo entorno"
-           echo "   Origen seleccionado: ${{ github.event.inputs.origen }}"
-           echo "   Destino seleccionado: ${{ github.event.inputs.destino }}"
-           echo "   Por favor, selecciona entornos diferentes"
-           exit 1
+      - name: Validar origen y destino diferentes
+        if: ${{ (github.event.inputs.modo == 'restaurar' || github.event.inputs.modo == 'completo') && github.event.inputs.origen == github.event.inputs.destino }}
+        run: |
+          echo "❌ Error: El origen y destino no pueden ser el mismo entorno"
+          echo "   Origen seleccionado: ${{ github.event.inputs.origen }}"
+          echo "   Destino seleccionado: ${{ github.event.inputs.destino }}"
+          echo "   Por favor, selecciona entornos diferentes"
+          exit 1
       # -------------------------------------
       # SINCRONIZACION DEL REPOSITORIO
       # -------------------------------------
@@ -132,19 +129,23 @@ jobs:
               ;;
           esac
       # -------------------------------------
-      # MODO EXTRAER o COMPLETO MULTI-CUENTA
+      # FASE DE EXTRACCIÓN (modo extraer y completo)
+      # Cada step de credenciales emite un nuevo
+      # token OIDC, por lo que extraer y restaurar
+      # pueden asumir roles distintos (multi-cuenta)
+      # o el mismo role (mono-cuenta) sin cambios.
       # -------------------------------------
       - name: Configurar AWS via OIDC para el Origen
-        if: ${{ github.event.inputs.modo == 'extraer' || ( github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'true' ) }}
+        if: ${{ github.event.inputs.modo == 'extraer' || github.event.inputs.modo == 'completo' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.ORIGEN_ROLE }}
           aws-region: ${{ github.event.inputs.region_aws }}
 
       - name: Volcado RDS
-        if: ${{ github.event.inputs.modo == 'extraer' || ( github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'true' ) }}
+        if: ${{ github.event.inputs.modo == 'extraer' || github.event.inputs.modo == 'completo' }}
         id: dump
-        uses: Griddo-infra/gha-grd-dbdt@v0.3
+        uses: Griddo-infra/gha-grd-dbdt@v0.4
         with:
           mode: extraer
           secret_origin: ${{ env.ORIGEN_SECRET }}
@@ -152,62 +153,31 @@ jobs:
           aws_region: ${{ github.event.inputs.region_aws }}
 
       - name: Guardar URL Pre-firmada
-        if: ${{ github.event.inputs.modo == 'extraer' || ( github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'true' ) }}
+        if: ${{ github.event.inputs.modo == 'extraer' || github.event.inputs.modo == 'completo' }}
         run: echo "${{ steps.dump.outputs.presigned_url }}" > url_prefirmada.txt
 
       - name: Subir URL Pre-firmada como artefacto
-        if: ${{ github.event.inputs.modo == 'extraer' || ( github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'true' ) }}
+        if: ${{ github.event.inputs.modo == 'extraer' || github.event.inputs.modo == 'completo' }}
         uses: actions/upload-artifact@v4
         with:
           name: url-prefirmada-${{ github.run_number }}
           path: url_prefirmada.txt
       # -------------------------------------
-      # MODO RESTAURAR O COMPLETO MULTI-CUENTA
+      # FASE DE RESTAURACIÓN (modo restaurar y completo)
       # -------------------------------------
       - name: Configurar AWS via OIDC para el Destino
-        if: ${{ github.event.inputs.modo == 'restaurar' || (github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'true') }}
+        if: ${{ github.event.inputs.modo == 'restaurar' || github.event.inputs.modo == 'completo' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DESTINO_ROLE }}
           aws-region: ${{ github.event.inputs.region_aws }}
 
       - name: Restauración RDS
-        if: ${{ github.event.inputs.modo == 'restaurar' || (github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'true') }}
-        uses: Griddo-infra/gha-grd-dbdt@v0.3
+        if: ${{ github.event.inputs.modo == 'restaurar' || github.event.inputs.modo == 'completo' }}
+        uses: Griddo-infra/gha-grd-dbdt@v0.4
         with:
           mode: restaurar
           secret_dest: ${{ env.DESTINO_SECRET }}
           presigned_url: ${{ github.event.inputs.presigned_url || steps.dump.outputs.presigned_url }}
           aws_region: ${{ github.event.inputs.region_aws }}
-      # -------------------------------------
-      # COMPLETO MONO-CUENTA
-      # -------------------------------------
-      - name: Configurar AWS via OIDC
-        if: ${{ github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'false' }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.ORIGEN_ROLE }}
-          aws-region: ${{ github.event.inputs.region_aws }}
-
-      - name: Completo misma cuenta
-        if: ${{ github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'false' }}
-        id: completo_simple
-        uses: Griddo-infra/gha-grd-dbdt@v0.3
-        with:
-          mode: completo
-          secret_origin: ${{ env.ORIGEN_SECRET }}
-          secret_dest: ${{ env.DESTINO_SECRET }}
-          ttl: ${{ github.event.inputs.ttl }}
-          aws_region: ${{ github.event.inputs.region_aws }}
-
-      - name: Guardar URL Pre-firmada (Completo)
-        if: ${{ github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'false' }}
-        run: echo "${{ steps.completo_simple.outputs.presigned_url }}" > url_prefirmada.txt
-
-      - name: Subir Artefacto URL Pre-firmada (Completo)
-        if: ${{ github.event.inputs.modo == 'completo' && env.MULTI_ACCOUNT == 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: url-prefirmada-${{ github.run_number }}
-          path: url_prefirmada.txt
 ~~~

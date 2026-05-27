@@ -6,9 +6,12 @@ Esta GitHub Action permite realizar volcados y restauraciones de bases de datos 
 
 ### Modos soportados
 
-- **Extracción** de un dump cifrado y comprimido.
-- **Carga** del dump en un bucket S3 con generación de URL presignada.
-- **Descarga y restauración** en otra base de datos RDS.
+La Action expone dos modos atómicos:
+
+- `extraer`: genera un dump comprimido y lo sube a S3 con URL presignada.
+- `restaurar`: descarga la URL presignada y restaura en la base destino.
+
+Para una migración extremo a extremo, el workflow encadena ambos modos en pasos separados con su propio `configure-aws-credentials`, lo que permite asumir roles distintos en origen y destino (multi-cuenta) o el mismo role en ambas fases (mono-cuenta). El ejemplo en [example.md](example.md) implementa esta convención bajo la opción `completo` del `workflow_dispatch`.
 
 La Action facilita **migraciones controladas** y **copias de seguridad automatizadas** entre cuentas o entornos AWS diferentes.
 
@@ -99,21 +102,21 @@ Si usas `ubuntu-latest`, instala estas dependencias en un paso previo:
 
 | Nombre          | Requerido   | Descripción                                                                                          |
 | --------------- | ----------- | -----------------------------------------------------------------------------------------------------|
-| `modo`          |    ✅ Sí    | Modo de operación: `extraer`, `restaurar` o `completo`.                                              |
-| `origen`        | Condicional | Entorno de origen (obligatorio en `extraer` y `completo`).                                           |
-| `destino`       | Condicional | Entorno de destino (obligatorio en `restaurar` y `completo`).                                        |
-| `ttl`           | Opcional    | Tiempo en segundos de validez de la URL pre-firmadas (por defecto 7200, obligatorio en `restaurar`). |
-| `presigned_url` | Opcional    | URL presignada del dump a restaurar. obligatorio en `restaurar`. Ignorada en otros modos.            |
+| `mode`          |    ✅ Sí    | Modo de operación: `extraer` o `restaurar`.                                                          |
+| `secret_origin` | Condicional | Nombre del secreto de origen (obligatorio en `extraer`).                                             |
+| `secret_dest`   | Condicional | Nombre del secreto de destino (obligatorio en `restaurar`).                                          |
+| `presigned_url` | Condicional | URL presignada del dump a restaurar (obligatorio en `restaurar`).                                    |
+| `ttl`           | Opcional    | Tiempo en segundos de validez de la URL pre-firmada (por defecto 7200).                              |
+| `aws_region`    |    ✅ Sí    | Región AWS donde residen los recursos.                                                               |
 
 ---
 
 ### 📊 Tabla de combinaciones requeridas por modo
 
-| Modo      | origen | destino | presigned_url | ttl      |
-| --------- | -------| ------- | ------------- | -------- |
-| extraer   |   ✅   |         |               | opcional |
-| restaurar |        |   ✅    |     ✅        |          |
-| completo  |   ✅   |   ✅    |               | opcional |
+| Modo      | secret_origin | secret_dest | presigned_url | ttl      |
+| --------- | ------------- | ----------- | ------------- | -------- |
+| extraer   |      ✅       |             |               | opcional |
+| restaurar |               |     ✅      |      ✅       |          |
 
 ---
 
@@ -147,14 +150,14 @@ La Action opera de la siguiente forma según el modo:
 
 ---
 
-### 🟣 Modo `completo`
+### 🟣 Convención `completo` (a nivel de workflow)
 
-Combina ambos pasos:
+La Action en sí no expone un modo `completo`: para una migración extremo a extremo el workflow encadena `extraer` y `restaurar` en steps separados, intercalando un `configure-aws-credentials` entre ellos. De este modo:
 
-  1. Primero ejecuta extraer.
-  2. Luego toma la URL generada y ejecuta restaurar.
+  1. Se asume el role de la cuenta **origen** y se ejecuta `extraer`.
+  2. Se asume el role de la cuenta **destino** y se ejecuta `restaurar` consumiendo la URL presignada del paso anterior.
 
-**Nota**: Si las cuentas origen y destino coinciden, la Action optimiza el flujo para no re-asumir el rol.
+Si origen y destino están en la misma cuenta, ambos pasos asumen el mismo role (operación idéntica, sin sobrecoste relevante). Si están en cuentas distintas, cada paso obtiene su propio token OIDC para el role correspondiente. El [example.md](example.md) muestra cómo exponer esta opción al usuario bajo la entrada `completo` del `workflow_dispatch`.
 
 ---
 
@@ -166,11 +169,11 @@ En el este [enlace](example.md) se encuentra un ejemplo completo del workflow ta
 
 ### Ejemplos prácticos
 
-| Origen | Destino | Modo        | Comentario                                |
-| ------ | ------- | ----------- | ----------------------------------------- |
-| `pro`  | N/A     | `extraer`   | Dump de Producción                        |
-| `stg`  | `dev`   | `completo`  | Mover datos de staging a desarrollo       |
-| `dev`  | `stg`   | `restaurar` | Restaurar dump dev en staging manualmente |
+| Origen | Destino | Modo workflow | Comentario                                                                         |
+| ------ | ------- | ------------- | ---------------------------------------------------------------------------------- |
+| `pro`  | N/A     | `extraer`     | Dump de Producción                                                                 |
+| `stg`  | `dev`   | `completo`    | Mover datos de staging a desarrollo (encadena extraer + restaurar en un solo run)  |
+| `dev`  | `stg`   | `restaurar`   | Restaurar dump dev en staging manualmente a partir de una URL presignada existente |
 
 ## 🔐 Seguridad y Buenas Prácticas
 
