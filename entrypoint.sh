@@ -105,9 +105,9 @@ modo_extraer() {
 
   echo ""
   echo "🗄️  Generando dump SQL con mysqldump..."
-  echo "   • Tablas ignoradas: revisions, log_alerts, distributor_cache, distributor_cache_structured_data"
+  echo "   • Tablas ignoradas: revisions, log_alerts, migrations, distributor_cache, distributor_cache_structured_data"
   mysqldump --verbose --single-transaction --quick --skip-lock-tables --set-gtid-purged=OFF \
-    --ignore-table="${DATABASE}.revisions" --ignore-table="${DATABASE}.log_alerts" \
+    --ignore-table="${DATABASE}.revisions" --ignore-table="${DATABASE}.log_alerts" --ignore-table="${DATABASE}.migrations" \
     --ignore-table="${DATABASE}.distributor_cache" --ignore-table="${DATABASE}.distributor_cache_structured_data" \
     -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" "$DATABASE" > "$DUMP_FILE"
   echo "✅ Dump generado: $(du -h "$DUMP_FILE" | cut -f1)"
