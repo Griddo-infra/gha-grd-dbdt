@@ -18,6 +18,10 @@ inputs:
     description: 'TTL de la URL pre-firmada en segundos'
     required: false
     default: '7200'
+  backup_before_restore:
+    description: 'Hacer un backup del destino antes de restaurar (true/false). Solo aplica en modo restaurar.'
+    required: false
+    default: 'true'
   aws_region:
     description: 'Región AWS (eu-south-2 por ejemplo)'
     required: true
@@ -26,6 +30,9 @@ outputs:
   presigned_url:
     description: "URL pre-firmada generada tras el volcado"
     value: ${{ steps.run_script.outputs.presigned_url }}
+  backup_presigned_url:
+    description: "URL pre-firmada del backup del destino realizado antes de restaurar (solo si backup_before_restore=true)"
+    value: ${{ steps.run_script.outputs.backup_presigned_url }}
 
 runs:
   using: "composite"
@@ -58,7 +65,9 @@ runs:
           restaurar)
             AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh restaurar \
               "${{ inputs.secret_dest }}" \
-              "${{ inputs.presigned_url }}"
+              "${{ inputs.presigned_url }}" \
+              "${{ inputs.backup_before_restore }}" \
+              "${{ inputs.ttl }}"
             ;;
           *)
             echo "Modo no soportado: ${{ inputs.mode }}"

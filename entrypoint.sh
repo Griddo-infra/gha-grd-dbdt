@@ -8,7 +8,7 @@ _CLEANED_UP=0
 print_usage() {
   echo "Uso:"
   echo "  $0 extraer <SECRETO_ORIGEN> [<TTL_SEGUNDOS>]"
-  echo "  $0 restaurar <SECRETO_DESTINO> <URL_PRESIGNED>"
+  echo "  $0 restaurar <SECRETO_DESTINO> <URL_PRESIGNED> [<BACKUP_BEFORE_RESTORE>] [<TTL_SEGUNDOS>]"
   exit 1
 }
 
@@ -22,6 +22,8 @@ OPENED_MY_IP=""
 TMP_DIR=$(mktemp -d)
 DUMP_FILE="$TMP_DIR/dump.sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
+BACKUP_FILE="$TMP_DIR/backup.sql"
+BACKUP_FILE_GZ="$BACKUP_FILE.gz"
 
 trap clean_up EXIT
 
@@ -37,7 +39,9 @@ clean_up() {
   fi
   if [[ -f "$DUMP_FILE" ]]; then rm -f "$DUMP_FILE"; fi
   if [[ -f "$DUMP_FILE_GZ" ]]; then rm -f "$DUMP_FILE_GZ"; fi
-  rm -rf "$TMP_DIR"  
+  if [[ -f "$BACKUP_FILE" ]]; then rm -f "$BACKUP_FILE"; fi
+  if [[ -f "$BACKUP_FILE_GZ" ]]; then rm -f "$BACKUP_FILE_GZ"; fi
+  rm -rf "$TMP_DIR"
 }
 
 get_secret() {
@@ -140,6 +144,8 @@ modo_extraer() {
 modo_restaurar() {
   local SECRET_NAME=$1
   local URL_PRESIGNED=$2
+  local BACKUP_BEFORE_RESTORE=${3:-true}
+  local TTL=${4:-7200}
 
   echo ""
   echo "══════════════════════════════════════════════════════════"
@@ -158,8 +164,10 @@ modo_restaurar() {
   PASSWORD_DEST=$(echo "$SECRET_JSON" | jq -r '.password')
   DATABASE_DEST=$(echo "$SECRET_JSON" | jq -r '.database')
   DB_INSTANCE_ID_DEST=$(echo "$SECRET_JSON" | jq -r '.db_instance_identifier')
+  S3_BUCKET_DEST=$(echo "$SECRET_JSON" | jq -r '.s3_bucket // empty')
   echo "   • Endpoint destino: $ENDPOINT_DEST"
   echo "   • Base de datos destino: $DATABASE_DEST"
+  echo "   • Backup previo: $BACKUP_BEFORE_RESTORE"
 
   echo ""
   echo "⬇️  Descargando dump desde URL presignada..."
@@ -172,6 +180,49 @@ modo_restaurar() {
   echo "✅ Dump descomprimido: $(du -h "$DUMP_FILE" | cut -f1)"
 
   open_temporary_access "$DB_INSTANCE_ID_DEST"
+
+  if [[ "$BACKUP_BEFORE_RESTORE" == "true" ]]; then
+    if [[ -z "$S3_BUCKET_DEST" ]]; then
+      echo "❌ ERROR: backup_before_restore=true pero el secret de destino no tiene 's3_bucket'. Abortando para no restaurar sin red de seguridad."
+      exit 1
+    fi
+
+    echo ""
+    echo "══════════════════════════════════════════════════════════"
+    echo "🛟 FASE: BACKUP PRE-RESTAURACIÓN DEL DESTINO"
+    echo "══════════════════════════════════════════════════════════"
+    echo "🗄️  Generando dump SQL del destino con mysqldump..."
+    mysqldump --verbose --single-transaction --quick --skip-lock-tables --set-gtid-purged=OFF \
+      -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" > "$BACKUP_FILE"
+    echo "✅ Backup generado: $(du -h "$BACKUP_FILE" | cut -f1)"
+
+    echo ""
+    echo "🗜️  Comprimiendo backup con gzip..."
+    gzip "$BACKUP_FILE"
+    echo "✅ Backup comprimido: $(du -h "$BACKUP_FILE_GZ" | cut -f1)"
+
+    BACKUP_FILENAME="backup_pre_restore_$(date +%Y%m%d_%H%M%S).sql.gz"
+    echo ""
+    echo "☁️  Subiendo backup a S3: s3://$S3_BUCKET_DEST/$BACKUP_FILENAME"
+    aws s3 cp "$BACKUP_FILE_GZ" "s3://$S3_BUCKET_DEST/$BACKUP_FILENAME" \
+      --region "$AWS_REGION" --metadata-directive REPLACE \
+      --content-disposition "attachment; filename=\"$BACKUP_FILENAME\""
+    echo "✅ Backup subido"
+
+    echo ""
+    echo "🔗 Generando URL presignada del backup (expira en ${TTL}s)..."
+    BACKUP_PRESIGNED_URL=$(aws s3 presign "s3://$S3_BUCKET_DEST/$BACKUP_FILENAME" --endpoint-url "https://s3.${AWS_REGION}.amazonaws.com" --expires-in "$TTL" --region "$AWS_REGION" --output text)
+    echo "backup_presigned_url=$BACKUP_PRESIGNED_URL" >> $GITHUB_OUTPUT
+    echo "✅ URL presignada del backup exportada a GITHUB_OUTPUT"
+
+    rm -f "$BACKUP_FILE_GZ"
+    echo "══════════════════════════════════════════════════════════"
+    echo "✅ BACKUP PRE-RESTAURACIÓN COMPLETADO"
+    echo "══════════════════════════════════════════════════════════"
+  else
+    echo ""
+    echo "ℹ️  backup_before_restore=false → se omite el backup previo del destino"
+  fi
 
   PRESERVE_SQL="$TMP_DIR/preserve.sql"
   : > "$PRESERVE_SQL"
@@ -212,7 +263,7 @@ case "$MODE" in
     ;;
   restaurar)
     if [[ $# -lt 3 ]]; then print_usage; fi
-    modo_restaurar "$2" "$3"
+    modo_restaurar "$2" "$3" "${4:-true}" "${5:-7200}"
     ;;
   *)
     print_usage
