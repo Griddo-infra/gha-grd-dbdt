@@ -100,23 +100,33 @@ Si usas `ubuntu-latest`, instala estas dependencias en un paso previo:
 
 ## ⚙️ Entradas de la Action
 
-| Nombre          | Requerido   | Descripción                                                                                          |
-| --------------- | ----------- | -----------------------------------------------------------------------------------------------------|
-| `mode`          |    ✅ Sí    | Modo de operación: `extraer` o `restaurar`.                                                          |
-| `secret_origin` | Condicional | Nombre del secreto de origen (obligatorio en `extraer`).                                             |
-| `secret_dest`   | Condicional | Nombre del secreto de destino (obligatorio en `restaurar`).                                          |
-| `presigned_url` | Condicional | URL presignada del dump a restaurar (obligatorio en `restaurar`).                                    |
-| `ttl`           | Opcional    | Tiempo en segundos de validez de la URL pre-firmada (por defecto 7200).                              |
-| `aws_region`    |    ✅ Sí    | Región AWS donde residen los recursos.                                                               |
+| Nombre                  | Requerido   | Descripción                                                                                                                  |
+| ----------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                  |    ✅ Sí    | Modo de operación: `extraer` o `restaurar`.                                                                                  |
+| `secret_origin`         | Condicional | Nombre del secreto de origen (obligatorio en `extraer`).                                                                     |
+| `secret_dest`           | Condicional | Nombre del secreto de destino (obligatorio en `restaurar`).                                                                  |
+| `presigned_url`         | Condicional | URL presignada del dump a restaurar (obligatorio en `restaurar`).                                                            |
+| `ttl`                   | Opcional    | Tiempo en segundos de validez de la URL pre-firmada (por defecto `7200`).                                                    |
+| `backup_before_restore` | Opcional    | Si `true`, antes de restaurar genera un backup completo del destino, lo sube a S3 y expone su URL presignada. Default `true`. Solo aplica en `restaurar`. |
+| `aws_region`            |    ✅ Sí    | Región AWS donde residen los recursos.                                                                                       |
+
+---
+
+### 📤 Salidas de la Action
+
+| Nombre                 | Modo      | Descripción                                                                                                          |
+| ---------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| `presigned_url`        | extraer   | URL pre-firmada del dump recién subido a S3 (válida durante `ttl` segundos).                                         |
+| `backup_presigned_url` | restaurar | URL pre-firmada del backup pre-restauración del destino. Solo se exporta cuando `backup_before_restore=true`.        |
 
 ---
 
 ### 📊 Tabla de combinaciones requeridas por modo
 
-| Modo      | secret_origin | secret_dest | presigned_url | ttl      |
-| --------- | ------------- | ----------- | ------------- | -------- |
-| extraer   |      ✅       |             |               | opcional |
-| restaurar |               |     ✅      |      ✅       |          |
+| Modo      | secret_origin | secret_dest | presigned_url | ttl      | backup_before_restore |
+| --------- | ------------- | ----------- | ------------- | -------- | --------------------- |
+| extraer   |      ✅       |             |               | opcional |                       |
+| restaurar |               |     ✅      |      ✅       | opcional | opcional (default `true`) |
 
 ---
 
@@ -126,27 +136,34 @@ La Action opera de la siguiente forma según el modo:
 
 ### 🟢 Modo `extraer`
 
-  1. Asume el rol, configurado en los secrtos del repo, en la cuenta origen.
+  1. Asume el rol, configurado en los secretos del repo, en la cuenta origen.
   2. Recupera las credenciales y detalles de conexión desde Secrets Manager.
   3. Abre acceso temporal en el grupo de seguridad RDS (puerto 3306).
-  4. Realiza `mysqldump` de la base de datos (excluyendo tablas `revisions` y `domains`).
+  4. Realiza `mysqldump` de la base de datos ignorando las tablas `revisions`, `log_alerts`, `migrations`, `distributor_cache` y `distributor_cache_structured_data`.
   5. Cierra el acceso temporal a la base de datos.
   6. Comprime el dump en Gzip.
-  7. Sube el archivo al bucket S3.
-  8. Genera una URL pre-firmada.
+  7. Sube el archivo al bucket S3 con el nombre `dump_<timestamp>.sql.gz`.
+  8. Genera una URL pre-firmada (válida durante `ttl` segundos).
   9. Devuelve la URL en el output `presigned_url`.
 
 ---
 
 ### 🟡 Modo `restaurar`
 
-  1. Asume el rol, configurado en los secrtos del repo, en la cuenta  destino.
-  2. Recupera credenciales de la base destino.
-  3. Descarga el dump desde la URL presignada.
-  4. Descomprime y filtra inserciones de usuarios `admin` o `bot`.
-  5. Abre acceso temporal a RDS destino.
-  6. Restaura el dump en la base especificada.
-  7. Cierra el acceso temporal.
+  1. Asume el rol, configurado en los secretos del repo, en la cuenta destino.
+  2. Valida que el secreto de destino **no** corresponda a un entorno `*_pro` (si lo es, aborta).
+  3. Recupera credenciales y detalles de conexión del destino desde Secrets Manager (incluyendo `s3_bucket` si está presente).
+  4. Descarga el dump desde la URL presignada y lo descomprime.
+  5. Abre acceso temporal en el grupo de seguridad RDS destino (puerto 3306).
+  6. 🛟 **Backup pre-restauración** (si `backup_before_restore=true`, valor por defecto):
+     - Exige que el secreto de destino tenga `s3_bucket`; si falta, aborta **antes** de tocar la base de datos.
+     - Realiza `mysqldump` completo de la base destino y lo comprime con Gzip.
+     - Lo sube al bucket S3 del destino con el nombre `backup_pre_restore_<timestamp>.sql.gz`.
+     - Genera una URL pre-firmada del backup y la expone en el output `backup_presigned_url`.
+  7. Extrae del destino los valores a preservar: `domain_url` por `domain_slug` de la tabla `domains`, y credenciales (`email`, `password`) del usuario `Administrator` y de los usuarios marcados como `bot`.
+  8. Restaura el dump del origen sobre la base destino.
+  9. Reaplica las sentencias preservadas en el paso 7 (sobrescribiendo lo que el dump pudiera haber traído).
+  10. Cierra el acceso temporal.
 
 ---
 
@@ -178,6 +195,8 @@ En el este [enlace](example.md) se encuentra un ejemplo completo del workflow ta
 ## 🔐 Seguridad y Buenas Prácticas
 
 - ✅ **No se permiten restauraciones en entornos de producción** (`*_pro`), están bloqueadas por defecto.
+- ✅ **Red de seguridad antes de restaurar**: por defecto (`backup_before_restore=true`) se genera y sube a S3 un backup completo del destino **antes** de aplicar el dump, y se expone en el output `backup_presigned_url` para una eventual reversión. Si el secreto de destino no tiene `s3_bucket`, la Action **aborta antes de tocar la base de datos**.
+- ✅ Se **preservan automáticamente** valores críticos del destino que no deben ser sobreescritos por el dump del origen: `domain_url` por `domain_slug` y credenciales (`email`, `password`) de `Administrator` y de los usuarios `bot`.
 - ✅ El **acceso mediante OIDC** esta limitado a los repositorios configurados.
 - ✅ Se usa un **bucket S3 dedicado** a estos backups en la cuenta de origen, con ciclo de vida de objetos.
 - ✅ El **rol asumido en AWS tiene limitaciones** sobre lo que puede hacer y a lo que puede acceder dentro de la cuenta.
