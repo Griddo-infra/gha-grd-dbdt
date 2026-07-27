@@ -9,6 +9,8 @@ print_usage() {
   echo "Uso:"
   echo "  $0 extraer <SECRETO_ORIGEN> [<TTL_SEGUNDOS>]"
   echo "  $0 restaurar <SECRETO_DESTINO> <URL_PRESIGNED> [<BACKUP_BEFORE_RESTORE>] [<TTL_SEGUNDOS>]"
+  echo "  $0 preparar_red <NETWORK_SCOPE>"
+  echo "  $0 limpiar_red <NETWORK_SCOPE>"
   exit 1
 }
 
@@ -17,8 +19,6 @@ if [[ $# -lt 2 ]]; then
 fi
 
 MODE=$1
-OPENED_SG_ID=""
-OPENED_MY_IP=""
 TMP_DIR=$(mktemp -d)
 DUMP_FILE="$TMP_DIR/dump.sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
@@ -32,11 +32,6 @@ clean_up() {
       return
   fi
   _CLEANED_UP=1
-  if [[ -n "$OPENED_SG_ID" && -n "$OPENED_MY_IP" ]]; then
-    if ! aws ec2 revoke-security-group-ingress --group-id "$OPENED_SG_ID" --protocol tcp --port 3306 --cidr "$OPENED_MY_IP" --output text; then
-      echo "⚠️  No se pudo revocar la regla (posiblemente ya no existe)"
-    fi
-  fi
   if [[ -f "$DUMP_FILE" ]]; then rm -f "$DUMP_FILE"; fi
   if [[ -f "$DUMP_FILE_GZ" ]]; then rm -f "$DUMP_FILE_GZ"; fi
   if [[ -f "$BACKUP_FILE" ]]; then rm -f "$BACKUP_FILE"; fi
@@ -49,39 +44,134 @@ get_secret() {
   aws secretsmanager get-secret-value --secret-id "$secret_name" --query SecretString --output text
 }
 
-open_temporary_access() {
-  local db_instance_id=$1
-  echo "🔐 Abriendo acceso temporal a la instancia RDS '$db_instance_id'..."
-  SG_ID=$(aws rds describe-db-instances \
-    --db-instance-identifier "$db_instance_id" \
-    --query 'DBInstances[0].VpcSecurityGroups[0].VpcSecurityGroupId' \
-    --output text)
-  echo "   • Security Group detectado: $SG_ID"
-  OPENED_SG_ID="$SG_ID"
-  MY_IP_PROVIDER="${MY_IP_PROVIDER:-https://checkip.amazonaws.com}"
-  MY_IP=$(curl -s "$MY_IP_PROVIDER")/32
-  OPENED_MY_IP="$MY_IP"
-  echo "   • IP de origen: $MY_IP"
-  EXISTING_RULE=$(aws ec2 describe-security-groups --group-ids "$SG_ID" --query "SecurityGroups[0].IpPermissions[?IpRanges[?CidrIp=='$MY_IP']]" --output text)
-  if [ -z "$EXISTING_RULE" ]; then
-    echo "   • Añadiendo regla de ingreso al SG..."
-    aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 3306 --cidr "$MY_IP" --output text
-    echo "✅ Acceso temporal abierto"
-  else
-    echo "ℹ️  Ya existía una regla para esta IP, no se modifica el SG"
+modo_preparar_red() {
+  local SCOPE=$1
+
+  echo ""
+  echo "══════════════════════════════════════════════════════════"
+  echo "🌐 FASE: PREPARAR RED (scope: $SCOPE)"
+  echo "══════════════════════════════════════════════════════════"
+
+  echo "🔍 Descubriendo recursos de red por tags (dbdt:scope=$SCOPE)..."
+  RT_ID=$(aws ec2 describe-route-tables \
+    --filters "Name=tag:dbdt:role,Values=runner-rt" "Name=tag:dbdt:scope,Values=$SCOPE" \
+    --query 'RouteTables[0].RouteTableId' --output text)
+  NAT_SUBNET_ID=$(aws ec2 describe-subnets \
+    --filters "Name=tag:dbdt:role,Values=nat-subnet" "Name=tag:dbdt:scope,Values=$SCOPE" \
+    --query 'Subnets[0].SubnetId' --output text)
+  if [[ -z "$RT_ID" || "$RT_ID" == "None" || -z "$NAT_SUBNET_ID" || "$NAT_SUBNET_ID" == "None" ]]; then
+    echo "❌ ERROR: No se encontraron la route table (dbdt:role=runner-rt) y/o la subnet del NAT (dbdt:role=nat-subnet) para el scope '$SCOPE'."
+    echo "   Despliega primero la infraestructura base (terraform) de este tenant."
+    exit 1
   fi
+  echo "   • Route table del runner: $RT_ID"
+  echo "   • Subnet pública para el NAT: $NAT_SUBNET_ID"
+
+  NAT_ID=$(aws ec2 describe-nat-gateways \
+    --filter "Name=tag:dbdt:managed,Values=true" "Name=tag:dbdt:scope,Values=$SCOPE" "Name=state,Values=pending,available" \
+    --query 'NatGateways[0].NatGatewayId' --output text)
+
+  if [[ -n "$NAT_ID" && "$NAT_ID" != "None" ]]; then
+    echo "ℹ️  Reutilizando NAT gateway existente: $NAT_ID"
+  else
+    echo "📡 Reservando Elastic IP..."
+    ALLOC_ID=$(aws ec2 allocate-address --domain vpc \
+      --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=dbdt-$SCOPE},{Key=dbdt:managed,Value=true},{Key=dbdt:scope,Value=$SCOPE}]" \
+      --query 'AllocationId' --output text)
+    echo "   • Allocation ID: $ALLOC_ID"
+    echo "🚧 Creando NAT gateway..."
+    NAT_ID=$(aws ec2 create-nat-gateway --subnet-id "$NAT_SUBNET_ID" --allocation-id "$ALLOC_ID" \
+      --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=dbdt-$SCOPE},{Key=dbdt:managed,Value=true},{Key=dbdt:scope,Value=$SCOPE}]" \
+      --query 'NatGateway.NatGatewayId' --output text)
+    echo "   • NAT gateway: $NAT_ID"
+  fi
+
+  echo "⏳ Esperando a que el NAT gateway esté disponible (~2 min)..."
+  aws ec2 wait nat-gateway-available --nat-gateway-ids "$NAT_ID"
+  echo "✅ NAT gateway disponible"
+
+  echo "🛣️  Configurando ruta por defecto 0.0.0.0/0 → $NAT_ID..."
+  if ! aws ec2 create-route --route-table-id "$RT_ID" --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_ID" --output text >/dev/null 2>&1; then
+    aws ec2 replace-route --route-table-id "$RT_ID" --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_ID" --output text >/dev/null
+    echo "   • Ruta existente reemplazada"
+  else
+    echo "   • Ruta creada"
+  fi
+
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "nat_gateway_id=$NAT_ID" >> "$GITHUB_OUTPUT"
+  fi
+  echo "══════════════════════════════════════════════════════════"
+  echo "✅ FASE PREPARAR RED COMPLETADA"
+  echo "══════════════════════════════════════════════════════════"
 }
 
-close_temporary_access() {
-  if [[ -n "$OPENED_SG_ID" && -n "$OPENED_MY_IP" ]]; then
-    if ! aws ec2 revoke-security-group-ingress --group-id "$OPENED_SG_ID" --protocol tcp --port 3306 --cidr "$OPENED_MY_IP" --output text; then
-      echo "⚠️  No se pudo revocar la regla (posiblemente ya no existe)"
+modo_limpiar_red() {
+  local SCOPE=$1
+
+  echo ""
+  echo "══════════════════════════════════════════════════════════"
+  echo "🧹 FASE: LIMPIAR RED (scope: $SCOPE)"
+  echo "══════════════════════════════════════════════════════════"
+
+  RT_ID=$(aws ec2 describe-route-tables \
+    --filters "Name=tag:dbdt:role,Values=runner-rt" "Name=tag:dbdt:scope,Values=$SCOPE" \
+    --query 'RouteTables[0].RouteTableId' --output text)
+  if [[ -n "$RT_ID" && "$RT_ID" != "None" ]]; then
+    echo "🛣️  Eliminando ruta por defecto de $RT_ID..."
+    if aws ec2 delete-route --route-table-id "$RT_ID" --destination-cidr-block 0.0.0.0/0 --output text >/dev/null 2>&1; then
+      echo "   • Ruta eliminada"
     else
-      echo "🔒 Acceso temporal cerrado para $OPENED_MY_IP"
+      echo "   • No había ruta por defecto (nada que eliminar)"
     fi
+  else
+    echo "ℹ️  No se encontró route table con scope '$SCOPE'"
   fi
-  OPENED_SG_ID=""
-  OPENED_MY_IP=""
+
+  NAT_IDS=$(aws ec2 describe-nat-gateways \
+    --filter "Name=tag:dbdt:managed,Values=true" "Name=tag:dbdt:scope,Values=$SCOPE" "Name=state,Values=pending,available" \
+    --query 'NatGateways[].NatGatewayId' --output text)
+  if [[ -n "$NAT_IDS" ]]; then
+    for nat in $NAT_IDS; do
+      echo "🗑️  Eliminando NAT gateway $nat..."
+      aws ec2 delete-nat-gateway --nat-gateway-id "$nat" --output text >/dev/null
+    done
+    echo "⏳ Esperando el borrado de los NAT gateways (~1-2 min)..."
+    # shellcheck disable=SC2086
+    aws ec2 wait nat-gateway-deleted --nat-gateway-ids $NAT_IDS
+    echo "✅ NAT gateways eliminados"
+  else
+    echo "ℹ️  No hay NAT gateways gestionados con scope '$SCOPE'"
+  fi
+
+  ALLOC_IDS=$(aws ec2 describe-addresses \
+    --filters "Name=tag:dbdt:managed,Values=true" "Name=tag:dbdt:scope,Values=$SCOPE" \
+    --query 'Addresses[?AssociationId==null].AllocationId' --output text)
+  if [[ -n "$ALLOC_IDS" ]]; then
+    for alloc in $ALLOC_IDS; do
+      echo "📡 Liberando Elastic IP $alloc..."
+      aws ec2 release-address --allocation-id "$alloc" --output text >/dev/null
+    done
+    echo "✅ Elastic IPs liberadas"
+  else
+    echo "ℹ️  No hay Elastic IPs gestionadas pendientes de liberar con scope '$SCOPE'"
+  fi
+
+  echo "══════════════════════════════════════════════════════════"
+  echo "✅ FASE LIMPIAR RED COMPLETADA"
+  echo "══════════════════════════════════════════════════════════"
+}
+
+check_db_connectivity() {
+  local endpoint=$1
+  echo "🔌 Comprobando conectividad de red con $endpoint:3306..."
+  if ! timeout 10 bash -c ">/dev/tcp/$endpoint/3306" 2>/dev/null; then
+    echo "❌ ERROR: No hay conectividad con $endpoint:3306."
+    echo "   El runner debe ejecutarse dentro de la VPC del RDS (runner de CodeBuild asociado a sus subnets)"
+    echo "   y el security group del RDS debe permitir el puerto 3306 desde el security group del runner."
+    exit 1
+  fi
+  echo "✅ Conectividad verificada"
 }
 
 modo_extraer() {
@@ -97,7 +187,6 @@ modo_extraer() {
   ENDPOINT=$(echo "$SECRET_JSON" | jq -r '.endpoint')
   USERNAME=$(echo "$SECRET_JSON" | jq -r '.username')
   PASSWORD=$(echo "$SECRET_JSON" | jq -r '.password')
-  DB_INSTANCE_ID=$(echo "$SECRET_JSON" | jq -r '.db_instance_identifier')
   S3_BUCKET=$(echo "$SECRET_JSON" | jq -r '.s3_bucket')
   DATABASE=$(echo "$SECRET_JSON" | jq -r '.database')
   echo "   • Endpoint: $ENDPOINT"
@@ -105,7 +194,7 @@ modo_extraer() {
   echo "   • Bucket S3: $S3_BUCKET"
   echo "   • TTL del enlace: ${TTL}s"
 
-  open_temporary_access "$DB_INSTANCE_ID"
+  check_db_connectivity "$ENDPOINT"
 
   echo ""
   echo "🗄️  Generando dump SQL con mysqldump..."
@@ -115,8 +204,6 @@ modo_extraer() {
     --ignore-table="${DATABASE}.distributor_cache" --ignore-table="${DATABASE}.distributor_cache_structured_data" \
     -h "$ENDPOINT" -u "$USERNAME" -p"$PASSWORD" "$DATABASE" > "$DUMP_FILE"
   echo "✅ Dump generado: $(du -h "$DUMP_FILE" | cut -f1)"
-
-  close_temporary_access "$OPENED_SG_ID" "$OPENED_MY_IP"
 
   echo ""
   echo "🗜️  Comprimiendo dump con gzip..."
@@ -163,7 +250,6 @@ modo_restaurar() {
   USERNAME_DEST=$(echo "$SECRET_JSON" | jq -r '.username')
   PASSWORD_DEST=$(echo "$SECRET_JSON" | jq -r '.password')
   DATABASE_DEST=$(echo "$SECRET_JSON" | jq -r '.database')
-  DB_INSTANCE_ID_DEST=$(echo "$SECRET_JSON" | jq -r '.db_instance_identifier')
   S3_BUCKET_DEST=$(echo "$SECRET_JSON" | jq -r '.s3_bucket // empty')
   echo "   • Endpoint destino: $ENDPOINT_DEST"
   echo "   • Base de datos destino: $DATABASE_DEST"
@@ -179,7 +265,7 @@ modo_restaurar() {
   gzip -d "$DUMP_FILE_GZ"
   echo "✅ Dump descomprimido: $(du -h "$DUMP_FILE" | cut -f1)"
 
-  open_temporary_access "$DB_INSTANCE_ID_DEST"
+  check_db_connectivity "$ENDPOINT_DEST"
 
   if [[ "$BACKUP_BEFORE_RESTORE" == "true" ]]; then
     if [[ -z "$S3_BUCKET_DEST" ]]; then
@@ -248,7 +334,6 @@ modo_restaurar() {
   mysql -h "$ENDPOINT_DEST" -u "$USERNAME_DEST" -p"$PASSWORD_DEST" "$DATABASE_DEST" --show-warnings < "$PRESERVE_SQL"
   echo "✅ Valores preservados reaplicados"
 
-  close_temporary_access "$OPENED_SG_ID" "$OPENED_MY_IP"
   echo "══════════════════════════════════════════════════════════"
   echo "✅ FASE RESTAURACIÓN COMPLETADA"
   echo "══════════════════════════════════════════════════════════"
@@ -264,6 +349,14 @@ case "$MODE" in
   restaurar)
     if [[ $# -lt 3 ]]; then print_usage; fi
     modo_restaurar "$2" "$3" "${4:-true}" "${5:-7200}"
+    ;;
+  preparar_red)
+    if [[ $# -lt 2 ]]; then print_usage; fi
+    modo_preparar_red "$2"
+    ;;
+  limpiar_red)
+    if [[ $# -lt 2 ]]; then print_usage; fi
+    modo_limpiar_red "$2"
     ;;
   *)
     print_usage

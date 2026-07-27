@@ -3,7 +3,7 @@ description: 'Volcado y restauración de MySQL/MariaDB RDS a través de Secrets 
 author: 'Orencio Ramírez'
 inputs:
   mode:
-    description: 'Modo de operación: extraer | restaurar'
+    description: 'Modo de operación: extraer | restaurar | preparar_red | limpiar_red'
     required: true
   secret_origin:
     description: 'Nombre del secreto de origen en AWS Secrets Manager'
@@ -22,6 +22,9 @@ inputs:
     description: 'Hacer un backup del destino antes de restaurar (true/false). Solo aplica en modo restaurar.'
     required: false
     default: 'true'
+  network_scope:
+    description: 'Identificador de la red de runner (tag dbdt:scope). Necesario en modos preparar_red y limpiar_red.'
+    required: false
   aws_region:
     description: 'Región AWS (eu-south-2 por ejemplo)'
     required: true
@@ -33,6 +36,9 @@ outputs:
   backup_presigned_url:
     description: "URL pre-firmada del backup del destino realizado antes de restaurar (solo si backup_before_restore=true)"
     value: ${{ steps.run_script.outputs.backup_presigned_url }}
+  nat_gateway_id:
+    description: "ID del NAT gateway efímero creado o reutilizado (solo en modo preparar_red)"
+    value: ${{ steps.run_script.outputs.nat_gateway_id }}
 
 runs:
   using: "composite"
@@ -40,8 +46,21 @@ runs:
     - name: Instalar Dependencias
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y jq mysql-client gzip curl unzip
+        # Soporta runners Ubuntu (GitHub-hosted / CodeBuild standard) y Amazon Linux (CodeBuild amazonlinux)
+        # El cliente MySQL solo hace falta en los modos que tocan la base de datos
+        case "${{ inputs.mode }}" in
+          extraer|restaurar) MYSQL_APT="mysql-client"; MYSQL_DNF="mariadb105" ;;
+          *) MYSQL_APT=""; MYSQL_DNF="" ;;
+        esac
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo apt-get update
+          sudo apt-get install -y jq gzip curl unzip $MYSQL_APT
+        elif command -v dnf >/dev/null 2>&1; then
+          sudo dnf install -y jq gzip curl unzip $MYSQL_DNF
+        else
+          echo "❌ Gestor de paquetes no soportado (se esperaba apt-get o dnf)"
+          exit 1
+        fi
 
     - name: Install AWS CLI v2
       shell: bash
@@ -68,6 +87,14 @@ runs:
               "${{ inputs.presigned_url }}" \
               "${{ inputs.backup_before_restore }}" \
               "${{ inputs.ttl }}"
+            ;;
+          preparar_red)
+            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh preparar_red \
+              "${{ inputs.network_scope }}"
+            ;;
+          limpiar_red)
+            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh limpiar_red \
+              "${{ inputs.network_scope }}"
             ;;
           *)
             echo "Modo no soportado: ${{ inputs.mode }}"
