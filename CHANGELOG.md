@@ -6,6 +6,8 @@ El formato sigue [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-27
+
 ### Breaking
 
 - Se elimina el mecanismo de **acceso temporal al RDS vía security group**: las instancias RDS pasan a ser privadas (sin acceso público al endpoint) y la Action ya no abre ni revoca reglas de ingress en ningún momento (funciones `open_temporary_access`/`close_temporary_access` eliminadas de `entrypoint.sh`, incluida la revocación en el `trap` de limpieza y la dependencia de `checkip.amazonaws.com`).
@@ -26,6 +28,11 @@ El formato sigue [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) 
 ### Changed
 
 - La instalación de dependencias es ahora condicional por modo: el cliente MySQL (`mysql-client`/`mariadb105`) solo se instala en `extraer` y `restaurar`; los modos de red solo instalan las utilidades base (`jq`, `gzip`, `curl`, `unzip`) y AWS CLI v2.
+
+### Fixed
+
+- El modo `restaurar` valida que `presigned_url` no llegue vacío y aborta con un mensaje explicativo **antes de tocar la base de datos**. Contexto: GitHub Actions descarta los outputs de job que contienen valores enmascarados (`Skip output ... since it may contain secret`), y la URL pre-firmada incluye credenciales de la sesión OIDC — entre jobs debe pasarse como artefacto (ver `example.md`).
+- `limpiar_red` reintenta la liberación de las Elastic IPs (hasta 6 intentos con 10s de espera): tras borrarse el NAT gateway, la asociación de la EIP tarda unos segundos en soltarse y el filtro anterior por `AssociationId==null` podía dejar la EIP huérfana.
 
 ## [0.6.0] - 2026-06-22
 
@@ -108,7 +115,8 @@ El formato sigue [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) 
 
 - Primera versión publicada de la Action: modos `extraer` y `restaurar` para volcado/restauración de RDS MySQL/MariaDB entre cuentas AWS vía Secrets Manager y S3, apertura/cierre temporal del security group de la instancia RDS, generación de URL pre-firmada y bloqueo de restauraciones contra entornos `*_pro`.
 
-[Unreleased]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.4.1...v0.5.0

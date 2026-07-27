@@ -139,6 +139,8 @@ La Action instala sus dependencias automáticamente (`jq`, `gzip`, `curl`, `unzi
 | `backup_presigned_url` | restaurar    | URL pre-firmada del backup pre-restauración del destino. Solo se exporta cuando `backup_before_restore=true`.        |
 | `nat_gateway_id`       | preparar_red | ID del NAT gateway efímero creado o reutilizado para el `network_scope` indicado.                                    |
 
+> ⚠️ **Las URLs pre-firmadas no pueden viajar como output de job**: contienen las credenciales de la sesión OIDC (enmascaradas en logs), y GitHub descarta silenciosamente cualquier output de job que contenga un secreto (`Skip output ... since it may contain secret`). Dentro del mismo job (`steps.<id>.outputs.*`) funcionan sin problema; **entre jobs deben pasarse como artefacto** (ver `example.md`). Si el modo `restaurar` recibe una URL vacía, aborta con un mensaje explicativo antes de tocar la base de datos.
+
 ---
 
 ### 📊 Tabla de combinaciones requeridas por modo

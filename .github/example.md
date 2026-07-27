@@ -206,8 +206,9 @@ jobs:
     needs: [validar, preparar-red-origen]
     if: ${{ github.event.inputs.modo == 'extraer' || github.event.inputs.modo == 'completo' }}
     runs-on: codebuild-grd-dbdt-${{ github.event.inputs.origen }}-${{ github.run_id }}-${{ github.run_attempt }}
-    outputs:
-      presigned_url: ${{ steps.dump.outputs.presigned_url }}
+    # ⚠️ La URL pre-firmada NO puede exponerse como output de job: contiene
+    # credenciales de la sesión OIDC y GitHub descarta el output ("Skip
+    # output ... since it may contain secret"). Se pasa por artefacto.
     steps:
       - name: Sincronizacion del repositorio
         uses: actions/checkout@v4
@@ -294,12 +295,26 @@ jobs:
           role-to-assume: ${{ env.DESTINO_ROLE }}
           aws-region: ${{ github.event.inputs.region_aws }}
 
+      # La URL llega por artefacto (no como output de job: GitHub lo
+      # descartaría por contener credenciales). Si el dispatch trae
+      # presigned_url manual, se usa esa y no se descarga artefacto.
+      - name: Descargar artefacto con la URL Pre-firmada
+        if: ${{ github.event.inputs.presigned_url == '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: url-prefirmada-${{ github.run_number }}
+
+      - name: Leer URL Pre-firmada
+        id: url
+        if: ${{ github.event.inputs.presigned_url == '' }}
+        run: echo "presigned_url=$(cat url_prefirmada.txt)" >> "$GITHUB_OUTPUT"
+
       - name: Restauración RDS
         uses: Griddo-infra/gha-grd-dbdt@v0.7
         with:
           mode: restaurar
           secret_dest: ${{ env.DESTINO_SECRET }}
-          presigned_url: ${{ github.event.inputs.presigned_url || needs.extraer.outputs.presigned_url }}
+          presigned_url: ${{ github.event.inputs.presigned_url || steps.url.outputs.presigned_url }}
           aws_region: ${{ github.event.inputs.region_aws }}
   # -------------------------------------
   # LIMPIAR RED EN ORIGEN (job final)
