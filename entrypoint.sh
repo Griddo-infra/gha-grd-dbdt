@@ -244,6 +244,13 @@ modo_restaurar() {
     exit 1
   fi
 
+  if [[ -z "$URL_PRESIGNED" ]]; then
+    echo "❌ ERROR: presigned_url está vacío. Si viene del output de otro job, recuerda que GitHub"
+    echo "   descarta outputs que contienen secretos (la URL pre-firmada incluye credenciales):"
+    echo "   pásala entre jobs mediante un artefacto."
+    exit 1
+  fi
+
   echo "🔑 Recuperando secreto de destino: $SECRET_NAME"
   SECRET_JSON=$(get_secret "$SECRET_NAME")
   ENDPOINT_DEST=$(echo "$SECRET_JSON" | jq -r '.endpoint')
