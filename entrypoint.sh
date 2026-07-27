@@ -144,17 +144,31 @@ modo_limpiar_red() {
     echo "ℹ️  No hay NAT gateways gestionados con scope '$SCOPE'"
   fi
 
+  # Ojo: tras borrarse el NAT, la asociación de la EIP tarda unos segundos
+  # más en soltarse — por eso se reintenta en lugar de filtrar por AssociationId.
   ALLOC_IDS=$(aws ec2 describe-addresses \
     --filters "Name=tag:dbdt:managed,Values=true" "Name=tag:dbdt:scope,Values=$SCOPE" \
-    --query 'Addresses[?AssociationId==null].AllocationId' --output text)
+    --query 'Addresses[].AllocationId' --output text)
   if [[ -n "$ALLOC_IDS" ]]; then
     for alloc in $ALLOC_IDS; do
       echo "📡 Liberando Elastic IP $alloc..."
-      aws ec2 release-address --allocation-id "$alloc" --output text >/dev/null
+      LIBERADA=0
+      for intento in 1 2 3 4 5 6; do
+        if aws ec2 release-address --allocation-id "$alloc" --output text >/dev/null 2>&1; then
+          LIBERADA=1
+          break
+        fi
+        echo "   • Aún asociada, reintentando en 10s (intento $intento/6)..."
+        sleep 10
+      done
+      if [[ $LIBERADA -eq 1 ]]; then
+        echo "   • Liberada"
+      else
+        echo "⚠️  No se pudo liberar $alloc tras 6 intentos — revísala manualmente"
+      fi
     done
-    echo "✅ Elastic IPs liberadas"
   else
-    echo "ℹ️  No hay Elastic IPs gestionadas pendientes de liberar con scope '$SCOPE'"
+    echo "ℹ️  No hay Elastic IPs gestionadas con scope '$SCOPE'"
   fi
 
   echo "══════════════════════════════════════════════════════════"
