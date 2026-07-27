@@ -6,12 +6,17 @@ Esta GitHub Action permite realizar volcados y restauraciones de bases de datos 
 
 ### Modos soportados
 
-La Action expone dos modos atómicos:
+La Action expone dos modos atómicos de base de datos:
 
 - `extraer`: genera un dump comprimido y lo sube a S3 con URL presignada.
 - `restaurar`: descarga la URL presignada y restaura en la base destino.
 
-Para una migración extremo a extremo, el workflow encadena ambos modos en pasos separados con su propio `configure-aws-credentials`, lo que permite asumir roles distintos en origen y destino (multi-cuenta) o el mismo role en ambas fases (mono-cuenta). El ejemplo en [example.md](example.md) implementa esta convención bajo la opción `completo` del `workflow_dispatch`.
+Y dos modos auxiliares de red, pensados para VPCs **sin NAT gateway permanente**:
+
+- `preparar_red`: crea (o reutiliza) un **NAT gateway efímero** con su Elastic IP y configura la ruta por defecto de la route table del runner, para que el runner de CodeBuild tenga salida a Internet y pueda registrarse en GitHub.
+- `limpiar_red`: elimina la ruta por defecto, destruye los NAT gateways efímeros del scope y libera sus Elastic IPs al terminar el workflow.
+
+Para una migración extremo a extremo, el workflow encadena ambos modos de base de datos en pasos separados con su propio `configure-aws-credentials`, lo que permite asumir roles distintos en origen y destino (multi-cuenta) o el mismo role en ambas fases (mono-cuenta). Los modos de red envuelven esa cadena: `preparar_red` corre **antes** de los jobs de CodeBuild (en un runner GitHub-hosted normal) y `limpiar_red` corre como job final con `if: always()`. El ejemplo en [example.md](example.md) implementa esta convención bajo la opción `completo` del `workflow_dispatch`.
 
 La Action facilita **migraciones controladas** y **copias de seguridad automatizadas** entre cuentas o entornos AWS diferentes.
 
@@ -24,12 +29,18 @@ Antes de utilizar esta Action, debes contar con:
 ### 1️⃣ Infraestructura y cuentas AWS
 
 - **Dos cuentas AWS** si planeas extraer de una y restaurar en otra.
+- **Un proyecto de AWS CodeBuild por cuenta configurado como GitHub Actions runner**, asociado a la VPC y subnets privadas del RDS y con su propio security group. Las instancias RDS son **privadas** (sin acceso público al endpoint), por lo que el runner debe tener acceso de red directo al endpoint.
+- **Regla estática en el security group del RDS** que permita el puerto 3306 desde el security group del runner de CodeBuild. La Action **no** crea, modifica ni elimina reglas de seguridad.
+- **Recursos de red etiquetados para el NAT efímero** (solo si usas `preparar_red`/`limpiar_red`): las VPCs de los tenants no tienen NAT gateway permanente (coste fijo de ~35 $/mes), por lo que la Action crea y destruye uno por ejecución. La infraestructura base (creada por terraform, fuera de esta Action) debe exponer, etiquetados con `dbdt:scope=<network_scope>`:
+  - La **route table de la subnet privada del runner**, con la tag `dbdt:role=runner-rt`.
+  - La **subnet pública donde vivirá el NAT**, con la tag `dbdt:role=nat-subnet`.
 - **Roles IAM creados en cada cuenta**, con políticas necesarias para:
   - Acceder a Secrets Manager.
-  - Ejecutar `rds:DescribeDBInstances`.
-  - Gestionar reglas de seguridad (`ec2:AuthorizeSecurityGroupIngress` y `ec2:RevokeSecurityGroupIngress`).
   - Ejecutar `s3:PutObject`, `s3:GetObject`, y `s3:CreatePresignedUrl`.
   - Ejecutar `sts:AssumeRole`.
+  - Para los modos de red (`preparar_red`/`limpiar_red`), además: `ec2:DescribeRouteTables`, `ec2:DescribeSubnets`, `ec2:DescribeNatGateways`, `ec2:DescribeAddresses`, `ec2:AllocateAddress`, `ec2:ReleaseAddress`, `ec2:CreateNatGateway`, `ec2:DeleteNatGateway`, `ec2:CreateRoute`, `ec2:ReplaceRoute`, `ec2:DeleteRoute` y `ec2:CreateTags`.
+
+  **Importante**: El rol OIDC ya **no** necesita los permisos `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress`, `ec2:DescribeSecurityGroups` ni `rds:DescribeDBInstances` que requerían versiones anteriores de la Action.
 
 Ejemplo de **ARN del rol** esperado:
 
@@ -56,14 +67,14 @@ Cada base de datos requiere un secreto con este **formato JSON**:
 }
 ~~~
 
-| Campo                   | Descripción                                                      |
-| ----------------------- | ---------------------------------------------------------------- |
-| `endpoint`              | Endpoint DNS de la base RDS                                      |
-| `username`              | Usuario con permisos de lectura y escritura                      |
-| `password`              | Contraseña del usuario                                           |
-| `database`              | Nombre de la base de datos                                       |
-| `db_instance_identifier`| Identificador RDS (se utiliza para abrir/cerrar acceso temporal) |
-| `s3_bucket`             | Bucket S3 destino del dump                                       |
+| Campo                   | Descripción                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `endpoint`              | Endpoint DNS de la base RDS                                                                    |
+| `username`              | Usuario con permisos de lectura y escritura                                                    |
+| `password`              | Contraseña del usuario                                                                         |
+| `database`              | Nombre de la base de datos                                                                     |
+| `db_instance_identifier`| **Ya no es necesario**: la Action no lo lee. Puede conservarse en el secreto por compatibilidad |
+| `s3_bucket`             | Bucket S3 destino del dump                                                                     |
 
   **Importante**: El bucket S3 debe existir previamente y el rol `DBDumpRole` debe tener permisos para operar sobre él.
 
@@ -71,28 +82,35 @@ Cada base de datos requiere un secreto con este **formato JSON**:
 
 ### 3️⃣ Entorno CI/CD en GitHub Actions
 
-El repositorio desde el que se ejecute la accion debe tener configurados los siquientes secretos por entorno disponible: ROLE_NAME_(entorno), SECRET_NAME_(entorno). A continuacion un ejemplo con tres entornos:
+El repositorio desde el que se ejecute la accion debe tener configurados los siquientes secretos por entorno disponible: ROLE_NAME_(entorno), SECRET_NAME_(entorno) y, si se usan los modos de red, NETWORK_SCOPE_(entorno). A continuacion un ejemplo con tres entornos:
 
-| Entorno      | Secreto           | Descripcion                                          |
-| ------------ | ----------------- | ---------------------------------------------------- |
-| PRO          | `SECRET_NAME_PRO` | Nombre del Secreto de AWS Secret Manager para usar   |
-|              | `IAM_ROLE_PRO`    | ARN completo del Role a asumir en este entorno       |
-| STG          | `SECRET_NAME_STG` | Nombre del Secreto de AWS Secret Manager para usar   |
-|              | `IAM_ROLE_STG`    | ARN completo del Role a asumir en este entorno       |
-| DEV          | `SECRET_NAME_DEV` | Nombre del Secreto de AWS Secret Manager para usar   |
-|              | `IAM_ROLE_DEV`    | ARN completo del Role a asumir en este entorno       |
+| Entorno      | Secreto             | Descripcion                                                       |
+| ------------ | ------------------- | ----------------------------------------------------------------- |
+| PRO          | `SECRET_NAME_PRO`   | Nombre del Secreto de AWS Secret Manager para usar                |
+|              | `IAM_ROLE_PRO`      | ARN completo del Role a asumir en este entorno                    |
+|              | `NETWORK_SCOPE_PRO` | Valor de la tag `dbdt:scope` de la red del runner de este entorno |
+| STG          | `SECRET_NAME_STG`   | Nombre del Secreto de AWS Secret Manager para usar                |
+|              | `IAM_ROLE_STG`      | ARN completo del Role a asumir en este entorno                    |
+|              | `NETWORK_SCOPE_STG` | Valor de la tag `dbdt:scope` de la red del runner de este entorno |
+| DEV          | `SECRET_NAME_DEV`   | Nombre del Secreto de AWS Secret Manager para usar                |
+|              | `IAM_ROLE_DEV`      | ARN completo del Role a asumir en este entorno                    |
+|              | `NETWORK_SCOPE_DEV` | Valor de la tag `dbdt:scope` de la red del runner de este entorno |
 
-El job que use esta Action debe:
+El job que use los modos `extraer` o `restaurar` debe:
 
-- Configurar credenciales AWS (por ejemplo, con `aws-actions/configure-aws-credentials`).
-- Disponer de los binarios instalados en el runner (`awscli`, `jq`, `mysql`, `mysqldump`, `gzip`, `curl`).
-
-Si usas `ubuntu-latest`, instala estas dependencias en un paso previo:
+- Ejecutarse en un **runner de CodeBuild dentro de la VPC del RDS**, usando la etiqueta del proyecto:
 
 ~~~yaml
-- name: Instalar dependencias
-  run: sudo apt-get update && sudo apt-get install -y mysql-client jq gzip curl
+runs-on: codebuild-<proyecto>-${{ github.run_id }}-${{ github.run_attempt }}
 ~~~
+
+- Configurar credenciales AWS (por ejemplo, con `aws-actions/configure-aws-credentials`).
+
+Los jobs que usen los modos `preparar_red` y `limpiar_red`, en cambio, se ejecutan en un **runner GitHub-hosted normal** (`runs-on: ubuntu-latest`): solo hablan con la API de AWS y no necesitan acceso a la VPC. De hecho, `preparar_red` **debe** correr antes que los jobs de CodeBuild, porque sin NAT el runner de CodeBuild no puede registrarse en GitHub.
+
+En flujos multi-cuenta, el job de `extraer` debe correr en el runner de CodeBuild de la **cuenta origen** y el job de `restaurar` en el de la **cuenta destino** (un proyecto CodeBuild por cuenta), cada uno con su pareja de jobs `preparar_red`/`limpiar_red` sobre el `network_scope` de su cuenta.
+
+La Action instala sus dependencias automáticamente (`jq`, `gzip`, `curl`, `unzip` y AWS CLI v2), detectando el gestor de paquetes del runner: `apt-get` en Ubuntu (GitHub-hosted o imagen standard de CodeBuild) o `dnf` en Amazon Linux de CodeBuild. Si no encuentra ninguno de los dos, falla con un mensaje claro. El **cliente MySQL** solo se instala en los modos que tocan la base de datos (`extraer` y `restaurar`): paquete `mysql-client` con `apt-get` o `mariadb105` con `dnf`.
 
   **Recomendación**: Usa entornos aislados o cuentas dedicadas para operaciones de restauración y validación de integridad.
 
@@ -102,31 +120,35 @@ Si usas `ubuntu-latest`, instala estas dependencias en un paso previo:
 
 | Nombre                  | Requerido   | Descripción                                                                                                                  |
 | ----------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                  |    ✅ Sí    | Modo de operación: `extraer` o `restaurar`.                                                                                  |
+| `mode`                  |    ✅ Sí    | Modo de operación: `extraer`, `restaurar`, `preparar_red` o `limpiar_red`.                                                   |
 | `secret_origin`         | Condicional | Nombre del secreto de origen (obligatorio en `extraer`).                                                                     |
 | `secret_dest`           | Condicional | Nombre del secreto de destino (obligatorio en `restaurar`).                                                                  |
 | `presigned_url`         | Condicional | URL presignada del dump a restaurar (obligatorio en `restaurar`).                                                            |
 | `ttl`                   | Opcional    | Tiempo en segundos de validez de la URL pre-firmada (por defecto `7200`).                                                    |
 | `backup_before_restore` | Opcional    | Si `true`, antes de restaurar genera un backup completo del destino, lo sube a S3 y expone su URL presignada. Default `true`. Solo aplica en `restaurar`. |
+| `network_scope`         | Condicional | Identificador de la red del runner: valor de la tag `dbdt:scope` de los recursos de red. Obligatorio en `preparar_red` y `limpiar_red`. |
 | `aws_region`            |    ✅ Sí    | Región AWS donde residen los recursos.                                                                                       |
 
 ---
 
 ### 📤 Salidas de la Action
 
-| Nombre                 | Modo      | Descripción                                                                                                          |
-| ---------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
-| `presigned_url`        | extraer   | URL pre-firmada del dump recién subido a S3 (válida durante `ttl` segundos).                                         |
-| `backup_presigned_url` | restaurar | URL pre-firmada del backup pre-restauración del destino. Solo se exporta cuando `backup_before_restore=true`.        |
+| Nombre                 | Modo         | Descripción                                                                                                          |
+| ---------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `presigned_url`        | extraer      | URL pre-firmada del dump recién subido a S3 (válida durante `ttl` segundos).                                         |
+| `backup_presigned_url` | restaurar    | URL pre-firmada del backup pre-restauración del destino. Solo se exporta cuando `backup_before_restore=true`.        |
+| `nat_gateway_id`       | preparar_red | ID del NAT gateway efímero creado o reutilizado para el `network_scope` indicado.                                    |
 
 ---
 
 ### 📊 Tabla de combinaciones requeridas por modo
 
-| Modo      | secret_origin | secret_dest | presigned_url | ttl      | backup_before_restore |
-| --------- | ------------- | ----------- | ------------- | -------- | --------------------- |
-| extraer   |      ✅       |             |               | opcional |                       |
-| restaurar |               |     ✅      |      ✅       | opcional | opcional (default `true`) |
+| Modo         | secret_origin | secret_dest | presigned_url | ttl      | backup_before_restore     | network_scope |
+| ------------ | ------------- | ----------- | ------------- | -------- | ------------------------- | ------------- |
+| extraer      |      ✅       |             |               | opcional |                           |               |
+| restaurar    |               |     ✅      |      ✅       | opcional | opcional (default `true`) |               |
+| preparar_red |               |             |               |          |                           |      ✅       |
+| limpiar_red  |               |             |               |          |                           |      ✅       |
 
 ---
 
@@ -138,13 +160,12 @@ La Action opera de la siguiente forma según el modo:
 
   1. Asume el rol, configurado en los secretos del repo, en la cuenta origen.
   2. Recupera las credenciales y detalles de conexión desde Secrets Manager.
-  3. Abre acceso temporal en el grupo de seguridad RDS (puerto 3306).
+  3. Comprueba la conectividad de red con el endpoint (test TCP al puerto 3306, timeout 10s); si el runner no alcanza la base, aborta indicando que debe ejecutarse en un runner de CodeBuild dentro de la VPC.
   4. Realiza `mysqldump` de la base de datos ignorando las tablas `revisions`, `log_alerts`, `migrations`, `distributor_cache` y `distributor_cache_structured_data`.
-  5. Cierra el acceso temporal a la base de datos.
-  6. Comprime el dump en Gzip.
-  7. Sube el archivo al bucket S3 con el nombre `dump_<timestamp>.sql.gz`.
-  8. Genera una URL pre-firmada (válida durante `ttl` segundos).
-  9. Devuelve la URL en el output `presigned_url`.
+  5. Comprime el dump en Gzip.
+  6. Sube el archivo al bucket S3 con el nombre `dump_<timestamp>.sql.gz`.
+  7. Genera una URL pre-firmada (válida durante `ttl` segundos).
+  8. Devuelve la URL en el output `presigned_url`.
 
 ---
 
@@ -154,7 +175,7 @@ La Action opera de la siguiente forma según el modo:
   2. Valida que el secreto de destino **no** corresponda a un entorno `*_pro` (si lo es, aborta).
   3. Recupera credenciales y detalles de conexión del destino desde Secrets Manager (incluyendo `s3_bucket` si está presente).
   4. Descarga el dump desde la URL presignada y lo descomprime.
-  5. Abre acceso temporal en el grupo de seguridad RDS destino (puerto 3306).
+  5. Comprueba la conectividad de red con el endpoint destino (test TCP al puerto 3306, timeout 10s); si el runner no alcanza la base, aborta indicando que debe ejecutarse en un runner de CodeBuild dentro de la VPC.
   6. 🛟 **Backup pre-restauración** (si `backup_before_restore=true`, valor por defecto):
      - Exige que el secreto de destino tenga `s3_bucket`; si falta, aborta **antes** de tocar la base de datos.
      - Realiza `mysqldump` completo de la base destino y lo comprime con Gzip.
@@ -163,18 +184,42 @@ La Action opera de la siguiente forma según el modo:
   7. Extrae del destino los valores a preservar: `domain_url` por `domain_slug` de la tabla `domains`, y credenciales (`email`, `password`) del usuario `Administrator` y de los usuarios marcados como `bot`.
   8. Restaura el dump del origen sobre la base destino.
   9. Reaplica las sentencias preservadas en el paso 7 (sobrescribiendo lo que el dump pudiera haber traído).
-  10. Cierra el acceso temporal.
+
+---
+
+### 🌐 Modo `preparar_red`
+
+Corre en un runner GitHub-hosted (`ubuntu-latest`), **antes** de los jobs de CodeBuild, con las credenciales de la cuenta cuya red hay que preparar. Es **idempotente**: puede relanzarse sin crear recursos duplicados.
+
+  1. Descubre por tags (`dbdt:scope=<network_scope>`) la route table del runner (`dbdt:role=runner-rt`) y la subnet pública para el NAT (`dbdt:role=nat-subnet`). Si falta alguna, aborta indicando que hay que desplegar primero la infraestructura base (terraform).
+  2. Busca un NAT gateway ya gestionado (`dbdt:managed=true`) para ese scope en estado `pending`/`available`; si existe, lo **reutiliza**.
+  3. Si no existe, reserva una Elastic IP y crea el NAT gateway en la subnet pública, ambos etiquetados con `dbdt:managed=true` y `dbdt:scope=<network_scope>`.
+  4. Espera a que el NAT gateway esté disponible (~2 minutos).
+  5. Crea la ruta por defecto `0.0.0.0/0 → NAT` en la route table del runner (o la reemplaza si ya existía).
+  6. Devuelve el ID del NAT en el output `nat_gateway_id`.
+
+---
+
+### 🧹 Modo `limpiar_red`
+
+Corre en un runner GitHub-hosted (`ubuntu-latest`) como **job final con `if: always()`**, para que el NAT efímero se destruya aunque los jobs anteriores fallen. Es idempotente y tolerante a la ausencia de recursos (no falla si no hay nada que limpiar).
+
+  1. Localiza la route table del runner por tags y elimina su ruta por defecto `0.0.0.0/0` (si existe).
+  2. Elimina **todos** los NAT gateways etiquetados con `dbdt:managed=true` y `dbdt:scope=<network_scope>` y espera a que su borrado termine (~1-2 minutos).
+  3. Libera las Elastic IPs etiquetadas con ese scope que hayan quedado sin asociar.
 
 ---
 
 ### 🟣 Convención `completo` (a nivel de workflow)
 
-La Action en sí no expone un modo `completo`: para una migración extremo a extremo el workflow encadena `extraer` y `restaurar` en steps separados, intercalando un `configure-aws-credentials` entre ellos. De este modo:
+La Action en sí no expone un modo `completo`: para una migración extremo a extremo el workflow encadena los cuatro modos en **jobs separados**, cada uno con su propio `configure-aws-credentials`. La orquestación típica es:
 
-  1. Se asume el role de la cuenta **origen** y se ejecuta `extraer`.
-  2. Se asume el role de la cuenta **destino** y se ejecuta `restaurar` consumiendo la URL presignada del paso anterior.
+  1. Los jobs `preparar-red-*` corren en runners GitHub-hosted (`ubuntu-latest`), uno por cuenta implicada, y ejecutan `preparar_red` con el `network_scope` de cada red para levantar el NAT efímero.
+  2. El job `extraer` corre en el runner de CodeBuild de la cuenta **origen** (necesita su `preparar-red`), asume su role y ejecuta `extraer`, exponiendo la URL presignada como output del job.
+  3. El job `restaurar` corre en el runner de CodeBuild de la cuenta **destino** (necesita su `preparar-red` y el job `extraer`), asume su role y ejecuta `restaurar` consumiendo la URL presignada del job anterior.
+  4. Un job final `limpiar-red` con `if: always()` ejecuta `limpiar_red` por cada scope preparado, destruyendo los NAT efímeros aunque los jobs anteriores hayan fallado.
 
-Si origen y destino están en la misma cuenta, ambos pasos asumen el mismo role (operación idéntica, sin sobrecoste relevante). Si están en cuentas distintas, cada paso obtiene su propio token OIDC para el role correspondiente. El [example.md](example.md) muestra cómo exponer esta opción al usuario bajo la entrada `completo` del `workflow_dispatch`.
+Se recomienda además un `concurrency group` a nivel de workflow para evitar ejecuciones simultáneas que compitan por la misma red. Si origen y destino están en la misma cuenta, ambos jobs de base de datos usan el mismo proyecto CodeBuild y el mismo role. Si están en cuentas distintas, cada job corre en el runner de su cuenta y obtiene su propio token OIDC para el role correspondiente. El [example.md](example.md) muestra cómo exponer esta opción al usuario bajo la entrada `completo` del `workflow_dispatch`.
 
 ---
 
@@ -203,7 +248,10 @@ En el este [enlace](example.md) se encuentra un ejemplo completo del workflow ta
 - ✅ **No se almacenan credenciales** en código fuente.
 - ✅ Los **secretos del repositorio no se exponen** en la salida de la accion ni en los logs.
 - ✅ **Los volcados quedan en S3** solo durante el tiempo definido por el TTL y **maximo por 24 Horas**.
-- ✅ **El acceso al puerto MySQL** se abre exclusivamente al runner y **se cierra inmediatamente tras finalizar**.
+- ✅ **La Action no modifica security groups**: las instancias RDS son privadas y el acceso de red es responsabilidad de la infraestructura (runner de CodeBuild asociado a las subnets privadas de la VPC + regla estática de 3306 desde el security group del runner). No existen reglas dinámicas que puedan quedar residuales.
+- ✅ **Comprobación previa de conectividad**: antes de tocar la base de datos se verifica el acceso TCP al endpoint (puerto 3306) y se aborta con un mensaje claro si el runner no tiene conectividad.
+- ✅ **NAT efímero, no permanente**: las VPCs no necesitan un NAT gateway fijo (~35 $/mes); la Action lo crea y destruye por ejecución (coste aproximado de 0,05-0,10 $ por NAT y ejecución, al facturarse por hora; coste fijo mensual ≈ 0). Todos los recursos que crea (NAT gateway y Elastic IP) quedan etiquetados con `dbdt:managed=true` y `dbdt:scope=<network_scope>`, de forma que son identificables y `limpiar_red` solo borra lo que la Action gestiona.
+- ⚠️ **Riesgo conocido del NAT efímero**: si el workflow se cancela y el job de limpieza no llega a ejecutarse, el NAT queda vivo (y facturando) hasta que alguien lo borre. Mitígalo ejecutando `limpiar_red` en un job final con `if: always()`; en el peor caso, las tags `dbdt:*` permiten localizar y eliminar los recursos huérfanos a mano (o relanzando `limpiar_red`).
 - ✅ Los ficheros locales se eliminan y los runners son efimeros.
 
 ---

@@ -6,6 +6,27 @@ El formato sigue [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Breaking
+
+- Se elimina el mecanismo de **acceso temporal al RDS vía security group**: las instancias RDS pasan a ser privadas (sin acceso público al endpoint) y la Action ya no abre ni revoca reglas de ingress en ningún momento (funciones `open_temporary_access`/`close_temporary_access` eliminadas de `entrypoint.sh`, incluida la revocación en el `trap` de limpieza y la dependencia de `checkip.amazonaws.com`).
+- Los workflows consumidores deben ejecutarse en **runners de AWS CodeBuild asociados a las subnets privadas de la VPC del RDS** (`runs-on: codebuild-<proyecto>-${{ github.run_id }}-${{ github.run_attempt }}`), y el security group del RDS debe permitir el puerto 3306 desde el security group del runner (regla estática). En flujos multi-cuenta, `extraer` corre en el CodeBuild de la cuenta origen y `restaurar` en el de la cuenta destino.
+- El campo `db_instance_identifier` del secreto **ya no se lee** (solo servía para descubrir el security group). Los secretos pueden conservarlo, pero deja de ser necesario.
+- El rol OIDC ya **no** necesita los permisos `ec2:AuthorizeSecurityGroupIngress`, `ec2:RevokeSecurityGroupIngress`, `ec2:DescribeSecurityGroups` ni `rds:DescribeDBInstances`.
+
+### Added
+
+- Nuevo modo `preparar_red`: crea (o reutiliza, de forma idempotente) un **NAT gateway efímero** con Elastic IP para dar salida a Internet al runner de CodeBuild en VPCs sin NAT permanente. Descubre por tags (`dbdt:scope=<network_scope>`) la route table del runner (`dbdt:role=runner-rt`) y la subnet pública del NAT (`dbdt:role=nat-subnet`), etiqueta los recursos creados con `dbdt:managed=true` + `dbdt:scope`, espera a que el NAT esté disponible (~2 min) y crea/reemplaza la ruta por defecto `0.0.0.0/0`. Se ejecuta en un runner GitHub-hosted, antes de los jobs de CodeBuild.
+- Nuevo modo `limpiar_red`: elimina la ruta por defecto, borra todos los NAT gateways etiquetados con el scope (esperando su borrado) y libera las Elastic IPs etiquetadas no asociadas. Idempotente y tolerante a la ausencia de recursos; pensado para un job final con `if: always()`.
+- Nuevo input `network_scope`: identificador de la red del runner (valor de la tag `dbdt:scope`), obligatorio en los modos `preparar_red` y `limpiar_red`.
+- Nuevo output `nat_gateway_id`: ID del NAT gateway efímero creado o reutilizado (solo en modo `preparar_red`).
+- El rol OIDC necesita permisos EC2 adicionales para los modos de red: `ec2:DescribeRouteTables`, `ec2:DescribeSubnets`, `ec2:DescribeNatGateways`, `ec2:DescribeAddresses`, `ec2:AllocateAddress`, `ec2:ReleaseAddress`, `ec2:CreateNatGateway`, `ec2:DeleteNatGateway`, `ec2:CreateRoute`, `ec2:ReplaceRoute`, `ec2:DeleteRoute` y `ec2:CreateTags`.
+- Nueva comprobación previa de conectividad (`check_db_connectivity`): test TCP con timeout de 10s contra `endpoint:3306` al inicio de ambos modos (`extraer` y `restaurar`); si el runner no tiene conectividad, la Action aborta con un mensaje que indica que debe ejecutarse en un runner de CodeBuild dentro de la VPC y que el SG del RDS debe permitir 3306 desde el SG del runner.
+- Soporte para runners **Amazon Linux de CodeBuild**: el paso «Instalar Dependencias» de `action.yml` detecta el gestor de paquetes (`apt-get` en Ubuntu, `dnf` en Amazon Linux, donde el cliente MySQL es el paquete `mariadb105`) y falla con un mensaje claro si no encuentra ninguno.
+
+### Changed
+
+- La instalación de dependencias es ahora condicional por modo: el cliente MySQL (`mysql-client`/`mariadb105`) solo se instala en `extraer` y `restaurar`; los modos de red solo instalan las utilidades base (`jq`, `gzip`, `curl`, `unzip`) y AWS CLI v2.
+
 ## [0.6.0] - 2026-06-22
 
 ### Added
