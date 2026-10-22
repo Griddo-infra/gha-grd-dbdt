@@ -6,6 +6,12 @@ El formato sigue [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-22
+
+### Fixed
+
+- La instalación de dependencias con `apt-get` tolera fallos transitorios de `apt-get update`: se reintenta hasta 3 veces (con 10s de espera) y, si no se recupera, se continúa con los índices disponibles dejando que `apt-get install` decida si realmente faltan paquetes. Contexto: un mirror a mitad de sincronización de un repo de la imagen base de CodeBuild que la Action no usa (`packages.mozilla.org`) hacía fallar todo el job `extraer` con exit 100.
+
 ## [0.7.0] - 2026-07-27
 
 ### Breaking
@@ -115,7 +121,8 @@ El formato sigue [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) 
 
 - Primera versión publicada de la Action: modos `extraer` y `restaurar` para volcado/restauración de RDS MySQL/MariaDB entre cuentas AWS vía Secrets Manager y S3, apertura/cierre temporal del security group de la instancia RDS, generación de URL pre-firmada y bloqueo de restauraciones contra entornos `*_pro`.
 
-[Unreleased]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Griddo-infra/gha-grd-dbdt/compare/v0.5.0...v0.5.1

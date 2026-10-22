@@ -110,7 +110,7 @@ Los jobs que usen los modos `preparar_red` y `limpiar_red`, en cambio, se ejecut
 
 En flujos multi-cuenta, el job de `extraer` debe correr en el runner de CodeBuild de la **cuenta origen** y el job de `restaurar` en el de la **cuenta destino** (un proyecto CodeBuild por cuenta), cada uno con su pareja de jobs `preparar_red`/`limpiar_red` sobre el `network_scope` de su cuenta.
 
-La Action instala sus dependencias automáticamente (`jq`, `gzip`, `curl`, `unzip` y AWS CLI v2), detectando el gestor de paquetes del runner: `apt-get` en Ubuntu (GitHub-hosted o imagen standard de CodeBuild) o `dnf` en Amazon Linux de CodeBuild. Si no encuentra ninguno de los dos, falla con un mensaje claro. El **cliente MySQL** solo se instala en los modos que tocan la base de datos (`extraer` y `restaurar`): paquete `mysql-client` con `apt-get` o `mariadb105` con `dnf`.
+La Action instala sus dependencias automáticamente (`jq`, `gzip`, `curl`, `unzip` y AWS CLI v2), detectando el gestor de paquetes del runner: `apt-get` en Ubuntu (GitHub-hosted o imagen standard de CodeBuild) o `dnf` en Amazon Linux de CodeBuild. Si no encuentra ninguno de los dos, falla con un mensaje claro. El **cliente MySQL** solo se instala en los modos que tocan la base de datos (`extraer` y `restaurar`): paquete `mysql-client` con `apt-get` o `mariadb105` con `dnf`. La instalación es tolerante a fallos transitorios de los mirrors: `apt-get update` se reintenta hasta 3 veces y, si no se recupera, se instala con los índices disponibles.
 
   **Recomendación**: Usa entornos aislados o cuentas dedicadas para operaciones de restauración y validación de integridad.
 

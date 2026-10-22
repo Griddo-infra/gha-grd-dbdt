@@ -53,7 +53,18 @@ runs:
           *) MYSQL_APT=""; MYSQL_DNF="" ;;
         esac
         if command -v apt-get >/dev/null 2>&1; then
-          sudo apt-get update
+          # apt-get update puede fallar por mirrors transitoriamente rotos de repos
+          # de la imagen base que no usamos (ej. packages.mozilla.org a mitad de sync):
+          # se reintenta y, si no se recupera, se instala con los índices disponibles
+          actualizado=false
+          for intento in 1 2 3; do
+            if sudo apt-get update; then actualizado=true; break; fi
+            echo "⚠️ apt-get update falló (intento ${intento}/3)"
+            sleep 10
+          done
+          if [ "$actualizado" = false ]; then
+            echo "⚠️ apt-get update no se recuperó; se intenta instalar con los índices disponibles"
+          fi
           sudo apt-get install -y jq gzip curl unzip $MYSQL_APT
         elif command -v dnf >/dev/null 2>&1; then
           sudo dnf install -y jq gzip curl unzip $MYSQL_DNF
