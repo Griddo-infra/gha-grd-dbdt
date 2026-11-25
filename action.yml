@@ -43,12 +43,16 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Los inputs llegan a los scripts como variables de entorno, nunca interpolados
+    # en el texto del script: un valor con comillas o $(...) no puede ejecutar nada.
     - name: Instalar Dependencias
       shell: bash
+      env:
+        DBDT_MODE: ${{ inputs.mode }}
       run: |
         # Soporta runners Ubuntu (GitHub-hosted / CodeBuild standard) y Amazon Linux (CodeBuild amazonlinux)
         # El cliente MySQL solo hace falta en los modos que tocan la base de datos
-        case "${{ inputs.mode }}" in
+        case "$DBDT_MODE" in
           extraer|restaurar) MYSQL_APT="mysql-client"; MYSQL_DNF="mariadb105" ;;
           *) MYSQL_APT=""; MYSQL_DNF="" ;;
         esac
@@ -76,39 +80,55 @@ runs:
     - name: Install AWS CLI v2
       shell: bash
       run: |
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-        unzip awscliv2.zip
+        # El instalador depende de la arquitectura del runner (x86_64 o ARM)
+        case "$(uname -m)" in
+          x86_64) AWSCLI_ARCH="x86_64" ;;
+          aarch64|arm64) AWSCLI_ARCH="aarch64" ;;
+          *) echo "❌ Arquitectura no soportada: $(uname -m)"; exit 1 ;;
+        esac
+        curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip" -o "awscliv2.zip"
+        unzip -q awscliv2.zip
         sudo ./aws/install --update
         rm -rf awscliv2.zip aws
 
     - name: Ejecutar Volcado y restauración de RDS
       id: run_script
       shell: bash
+      env:
+        DBDT_MODE: ${{ inputs.mode }}
+        DBDT_SECRET_ORIGIN: ${{ inputs.secret_origin }}
+        DBDT_SECRET_DEST: ${{ inputs.secret_dest }}
+        DBDT_PRESIGNED_URL: ${{ inputs.presigned_url }}
+        DBDT_BACKUP_BEFORE_RESTORE: ${{ inputs.backup_before_restore }}
+        DBDT_TTL: ${{ inputs.ttl }}
+        DBDT_NETWORK_SCOPE: ${{ inputs.network_scope }}
+        DBDT_AWS_REGION: ${{ inputs.aws_region }}
+        DBDT_ENTRYPOINT: ${{ github.action_path }}/entrypoint.sh
       run: |
-        chmod +x ${{ github.action_path }}/entrypoint.sh
-        case "${{ inputs.mode }}" in
+        chmod +x "$DBDT_ENTRYPOINT"
+        case "$DBDT_MODE" in
           extraer)
-            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh extraer \
-              "${{ inputs.secret_origin }}" \
-              "${{ inputs.ttl }}"
+            AWS_REGION="$DBDT_AWS_REGION" "$DBDT_ENTRYPOINT" extraer \
+              "$DBDT_SECRET_ORIGIN" \
+              "$DBDT_TTL"
             ;;
           restaurar)
-            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh restaurar \
-              "${{ inputs.secret_dest }}" \
-              "${{ inputs.presigned_url }}" \
-              "${{ inputs.backup_before_restore }}" \
-              "${{ inputs.ttl }}"
+            AWS_REGION="$DBDT_AWS_REGION" "$DBDT_ENTRYPOINT" restaurar \
+              "$DBDT_SECRET_DEST" \
+              "$DBDT_PRESIGNED_URL" \
+              "$DBDT_BACKUP_BEFORE_RESTORE" \
+              "$DBDT_TTL"
             ;;
           preparar_red)
-            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh preparar_red \
-              "${{ inputs.network_scope }}"
+            AWS_REGION="$DBDT_AWS_REGION" "$DBDT_ENTRYPOINT" preparar_red \
+              "$DBDT_NETWORK_SCOPE"
             ;;
           limpiar_red)
-            AWS_REGION="${{ inputs.aws_region }}" ${{ github.action_path }}/entrypoint.sh limpiar_red \
-              "${{ inputs.network_scope }}"
+            AWS_REGION="$DBDT_AWS_REGION" "$DBDT_ENTRYPOINT" limpiar_red \
+              "$DBDT_NETWORK_SCOPE"
             ;;
           *)
-            echo "Modo no soportado: ${{ inputs.mode }}"
+            echo "Modo no soportado: $DBDT_MODE"
             exit 1
             ;;
         esac

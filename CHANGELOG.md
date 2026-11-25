@@ -6,6 +6,14 @@ El formato sigue [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- El instalador de AWS CLI v2 se elige según la arquitectura del runner (`x86_64` o `aarch64`). Antes se descargaba siempre el de `x86_64`, que falla en runners ARM.
+
+### Security
+
+- Los inputs de la Action (`mode`, `secret_origin`, `secret_dest`, `presigned_url`, `backup_before_restore`, `ttl`, `network_scope`, `aws_region`) llegan a los scripts como variables de entorno en lugar de interpolarse en el texto del `run:`. Un valor con comillas o `$(...)` ya no puede ejecutar comandos en el job. El comportamiento con valores normales no cambia.
+
 ## [0.7.1] - 2026-10-22
 
 ### Fixed
